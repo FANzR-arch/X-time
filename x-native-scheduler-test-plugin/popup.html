@@ -1,0 +1,1070 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>X Native Scheduler</title>
+    <style>
+      @font-face {
+        font-family: "Chirp";
+        src: local("Chirp Regular"), local("Chirp-Regular"), url("fonts/Chirp-Regular.woff") format("woff");
+        font-weight: 400;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: "Chirp";
+        src: local("Chirp Medium"), local("Chirp-Medium"), url("fonts/Chirp-Medium.woff") format("woff");
+        font-weight: 500;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: "Chirp";
+        src: local("Chirp Bold"), local("Chirp-Bold"), url("fonts/Chirp-Bold.woff") format("woff");
+        font-weight: 700;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: "Chirp";
+        src: local("Chirp Heavy"), local("Chirp-Heavy"), url("fonts/Chirp-Heavy.woff") format("woff");
+        font-weight: 800;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      :root {
+        color-scheme: light;
+        --font-sans: "Chirp", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+        --bg: #ffffff;
+        --bottom-bg: #ffffff;
+        --panel: #ffffff;
+        --text: #050505;
+        --muted: #536471;
+        --faint: #8a949d;
+        --line: #e8e8e8;
+        --soft: #f3f4f4;
+        --soft-strong: #e8e9e9;
+        --primary: #050505;
+        --blue: #1d9bf0;
+        --blue-soft: #e8f5fe;
+        --danger-bg: #fff0ed;
+        --danger-line: #ffb6ac;
+        --danger: #c2170c;
+        --warning-bg: #f7f7f7;
+        --warning-line: #d2d2d2;
+        --radius: 18px;
+      }
+
+      * {
+        box-sizing: border-box;
+        scrollbar-width: none;
+      }
+
+      *::-webkit-scrollbar {
+        display: none;
+      }
+
+      html {
+        width: 100%;
+        height: 100%;
+        background: var(--bottom-bg);
+      }
+
+      body {
+        width: 100%;
+        height: 100vh;
+        margin: 0;
+        padding: 14px;
+        background: var(--bg);
+        color: var(--text);
+        display: flex;
+        flex-direction: column;
+        font: 13px/1.45 var(--font-sans);
+        overflow: hidden;
+      }
+
+      h1, h2, p {
+        margin: 0;
+      }
+
+      h2 {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        color: var(--text);
+        font-size: 17px;
+        font-weight: 900;
+        line-height: 1.18;
+      }
+
+      h2::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--primary);
+      }
+
+      button {
+        min-height: 40px;
+        border: 1px solid transparent;
+        border-radius: 999px;
+        padding: 9px 14px;
+        background: var(--soft);
+        color: var(--text);
+        font: 850 12px/1.2 var(--font-sans);
+        cursor: pointer;
+        transition: transform .16s ease, border-color .16s ease, background .16s ease, color .16s ease;
+      }
+
+      button:hover {
+        background: var(--soft-strong);
+        border-color: var(--primary);
+      }
+
+      button:active {
+        transform: translateY(1px);
+      }
+
+      button:focus-visible,
+      textarea:focus,
+      input:focus,
+      select:focus {
+        outline: 3px solid rgba(29, 155, 240, .22);
+        outline-offset: 2px;
+      }
+
+      button.primary {
+        background: var(--primary);
+        color: #ffffff;
+      }
+
+      button.primary:hover {
+        background: #242424;
+      }
+
+      button.danger {
+        background: var(--danger-bg);
+        border-color: var(--danger-line);
+        color: var(--danger);
+      }
+
+      textarea, input, select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 10px 12px;
+        color: var(--text);
+        background: #ffffff;
+        font: inherit;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 850;
+      }
+
+      .input-hint {
+        margin-top: 0;
+        color: var(--faint);
+        font-size: 11px;
+        font-weight: 500;
+      }
+
+      input[type="datetime-local"],
+      .date-time-input {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .top {
+        display: flex;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 12px;
+        padding: 12px 14px;
+        border: 1px solid var(--primary);
+        border-radius: 999px;
+        background: var(--primary);
+        color: #ffffff;
+      }
+
+      .brand {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .brand-mark {
+        display: inline-grid;
+        width: 38px;
+        height: 38px;
+        flex: 0 0 auto;
+        place-items: center;
+        border-radius: 50%;
+        overflow: hidden;
+        background: transparent;
+      }
+
+      .x-logo {
+        display: block;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        transform: scale(1.72);
+        transform-origin: center;
+      }
+
+      .top h1 {
+        color: #ffffff;
+        font-size: 20px;
+        line-height: 1.12;
+      }
+
+      .subtitle {
+        color: rgba(255, 255, 255, .74);
+        margin-top: 2px;
+        font-size: 12px;
+      }
+
+      .top button {
+        min-width: 96px;
+        background: #ffffff;
+        color: var(--primary);
+      }
+
+      .workbench {
+        display: grid;
+        flex: 1 1 auto;
+        min-height: 0;
+        grid-template-columns: minmax(360px, .9fr) minmax(0, 1.28fr);
+        gap: 12px;
+        align-items: stretch;
+        overflow: hidden;
+      }
+
+      .stack {
+        display: grid;
+        min-width: 0;
+        min-height: 0;
+        align-content: start;
+        gap: 12px;
+        overflow-y: auto;
+        padding-bottom: 2px;
+      }
+
+      .card {
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 14px;
+        background: var(--panel);
+      }
+
+      .compose-card {
+        --compose-x: 18px;
+        --compose-avatar: 42px;
+        --compose-gap: 12px;
+        position: relative;
+        padding: 0;
+        border-radius: 22px;
+      }
+
+      .compose-top {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        min-height: 30px;
+        padding: 8px 16px 0;
+      }
+
+      .icon-button {
+        display: inline-grid;
+        width: 34px;
+        min-width: 34px;
+        height: 34px;
+        min-height: 34px;
+        place-items: center;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--text);
+        font-size: 20px;
+        line-height: 1;
+      }
+
+      .icon-button:hover {
+        background: var(--soft);
+        border-color: transparent;
+      }
+
+      .draft-label {
+        min-height: 28px;
+        padding: 0 2px;
+        border: 0;
+        background: transparent;
+        color: var(--blue);
+        font-size: 14px;
+        font-weight: 900;
+      }
+
+      .draft-label:hover {
+        border-color: transparent;
+        background: transparent;
+        color: var(--blue);
+      }
+
+      .compose-main {
+        display: grid;
+        grid-template-columns: var(--compose-avatar) minmax(0, 1fr);
+        gap: var(--compose-gap);
+        padding: 0 var(--compose-x) 0;
+      }
+
+      .compose-avatar {
+        display: inline-grid;
+        width: var(--compose-avatar);
+        height: var(--compose-avatar);
+        place-items: center;
+        border-radius: 50%;
+        overflow: hidden;
+        background: var(--primary);
+      }
+
+      .source-input {
+        display: block;
+        min-width: 0;
+        min-height: 160px;
+        max-height: 400px;
+        margin-top: 2px;
+        border: 0;
+        border-radius: 0;
+        padding: 0;
+        color: var(--text);
+        font: 22px/1.42 var(--font-sans);
+        overflow-y: auto;
+        resize: none;
+      }
+
+      .source-input::placeholder {
+        color: #657786;
+      }
+
+      .source-input:focus {
+        outline: 0;
+      }
+
+      .compose-media {
+        display: grid;
+        gap: 8px;
+        margin: 0 var(--compose-x) 0 calc(var(--compose-x) + var(--compose-avatar) + var(--compose-gap));
+      }
+
+      .compose-media:empty {
+        display: none;
+      }
+
+      .draft-media-item {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 9px 10px;
+        background: var(--bottom-bg);
+      }
+
+      .draft-media-name {
+        overflow: hidden;
+        color: var(--text);
+        font-weight: 800;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .draft-media-detail {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .compose-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border-top: 1px solid #eff3f4;
+        padding: 10px var(--compose-x) 12px;
+      }
+
+      .tool-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .tool-button {
+        display: inline-grid;
+        width: 34px;
+        min-width: 34px;
+        height: 34px;
+        min-height: 34px;
+        place-items: center;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: #8aa0b2;
+        font-size: 18px;
+      }
+
+      .tool-button:hover {
+        background: var(--blue-soft);
+        border-color: transparent;
+        color: var(--blue);
+      }
+
+      .emoji-panel {
+        position: fixed;
+        top: 0;
+        left: 0;
+        display: none;
+        width: 308px;
+        max-width: calc(100vw - 24px);
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: #ffffff;
+        box-shadow: 0 12px 28px rgba(0, 0, 0, .18);
+        z-index: 9999;
+      }
+
+      .emoji-panel.open {
+        display: block;
+      }
+
+      .emoji-tabs {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 8px;
+        overflow: hidden;
+      }
+
+      .emoji-tab {
+        min-width: 36px;
+        min-height: 30px;
+        padding: 0 8px;
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        font-size: 17px;
+      }
+
+      .emoji-tab.active {
+        background: var(--blue-soft);
+        color: var(--blue);
+      }
+
+      .emoji-grid {
+        display: grid;
+        grid-template-columns: repeat(8, 30px);
+        max-height: 180px;
+        gap: 4px;
+        overflow-y: auto;
+        scrollbar-width: thin;
+      }
+
+      .emoji-grid::-webkit-scrollbar {
+        display: block;
+        width: 6px;
+      }
+
+      .emoji-grid::-webkit-scrollbar-thumb {
+        border-radius: 999px;
+        background: #c9d0d6;
+      }
+
+      .emoji-grid button {
+        display: inline-grid;
+        width: 30px;
+        min-width: 30px;
+        height: 30px;
+        min-height: 30px;
+        place-items: center;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        font-size: 18px;
+      }
+
+      .compose-import {
+        min-width: 74px;
+        background: #ffffff;
+        border-color: var(--line);
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 900;
+      }
+
+      .compose-save {
+        min-width: 100px;
+        background: #c9cccf;
+        color: #ffffff;
+        font-size: 14px;
+        font-weight: 950;
+      }
+
+      .compose-save.ready {
+        background: var(--primary);
+      }
+
+      .compose-save.ready:hover {
+        background: #242424;
+      }
+
+      .char-count {
+        color: var(--blue);
+        font-size: 12px;
+        font-weight: 850;
+      }
+
+      .section-help {
+        display: inline-grid;
+        width: 18px;
+        height: 18px;
+        place-items: center;
+        border-radius: 50%;
+        background: var(--soft);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        cursor: help;
+        flex-shrink: 0;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .section-meta {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .schedule-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .schedule-grid .wide {
+        grid-column: 1 / -1;
+      }
+
+      .media-library {
+        border: 1px dashed var(--line);
+        border-radius: 18px;
+        padding: 12px;
+        background: var(--bottom-bg);
+      }
+
+      .media-list {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .media-item {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        padding: 7px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .media-item:last-child {
+        border-bottom: 0;
+      }
+
+      .media-name {
+        overflow: hidden;
+        color: var(--text);
+        font-weight: 750;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .media-detail {
+        color: var(--faint);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
+      .preview {
+        display: grid;
+        min-height: clamp(210px, 34vh, 320px);
+        max-height: clamp(260px, 42vh, 430px);
+        gap: 10px;
+        overflow-y: auto;
+        padding-right: 2px;
+        scrollbar-width: thin;
+      }
+
+      .preview::-webkit-scrollbar {
+        display: block;
+        width: 6px;
+      }
+
+      .preview::-webkit-scrollbar-thumb {
+        border-radius: 999px;
+        background: #c9d0d6;
+      }
+
+      .preview-item {
+        display: grid;
+        grid-template-columns: 42px minmax(0, 1fr);
+        gap: 10px;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 14px;
+        background: #ffffff;
+        cursor: pointer;
+        transition: border-color .16s ease, background .16s ease;
+      }
+
+      .preview-item:hover {
+        border-color: var(--primary);
+        background: #fbfbfb;
+      }
+
+      .preview-item.is-editing {
+        border-color: var(--blue);
+        background: #f7fbff;
+      }
+
+      .avatar {
+        display: inline-grid;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        border-radius: 50%;
+        overflow: hidden;
+        background: var(--primary);
+      }
+
+      .tweet-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .account {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 13px;
+        font-weight: 900;
+      }
+
+      .account span {
+        color: var(--muted);
+        font-weight: 650;
+      }
+
+      .time-badge {
+        flex: 0 0 auto;
+        border-radius: 999px;
+        padding: 4px 9px;
+        background: var(--soft);
+        color: var(--text);
+        font-size: 11px;
+        font-weight: 850;
+      }
+
+      .tweet-body {
+        margin-top: 7px;
+        color: var(--text);
+        font-size: 14px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      .tweet-media {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+        margin-top: 10px;
+        overflow: hidden;
+        border-radius: 16px;
+      }
+
+      .tweet-media.single {
+        grid-template-columns: 1fr;
+      }
+
+      .tweet-media img,
+      .tweet-media video {
+        width: 100%;
+        height: 152px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--soft);
+        object-fit: cover;
+      }
+
+      .pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 10px;
+      }
+
+      .pill {
+        display: inline-flex;
+        max-width: 100%;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 8px;
+        color: var(--muted);
+        background: var(--soft);
+        font-size: 11px;
+        font-weight: 750;
+      }
+
+      .pill.warning-pill {
+        border-color: var(--warning-line);
+        color: var(--text);
+        background: var(--warning-bg);
+      }
+
+      .tweet-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 12px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .preview-delete {
+        min-height: 28px;
+        padding: 4px 10px;
+        border-color: var(--danger-line);
+        background: var(--danger-bg);
+        color: var(--danger);
+        font-size: 11px;
+      }
+
+      .publish-actions {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .status {
+        min-height: 44px;
+        margin-top: 12px;
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: var(--bottom-bg);
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .status.error {
+        border-color: var(--danger-line);
+        background: var(--danger-bg);
+        color: var(--danger);
+      }
+
+      .status.success {
+        border-color: rgba(29, 155, 240, .26);
+        background: var(--blue-soft);
+        color: var(--blue);
+      }
+
+      .log {
+        min-height: clamp(78px, 13vh, 124px);
+        max-height: clamp(96px, 18vh, 160px);
+        overflow-y: auto;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 12px;
+        background: var(--soft);
+        color: var(--text);
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        white-space: pre-wrap;
+      }
+
+      .hint {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .empty-state {
+        display: grid;
+        gap: 4px;
+        min-height: 76px;
+        align-content: center;
+        border: 1px dashed var(--line);
+        border-radius: 18px;
+        padding: 14px;
+        color: var(--muted);
+        background: var(--bottom-bg);
+        font-size: 12px;
+      }
+
+      .empty-state strong {
+        color: var(--text);
+        font-size: 13px;
+      }
+
+      .hidden-input {
+        display: none;
+      }
+
+      @media (max-width: 1120px) {
+        body {
+          padding: 12px;
+        }
+
+        .workbench {
+          grid-template-columns: minmax(350px, .95fr) minmax(0, 1.16fr);
+          gap: 10px;
+        }
+
+        .card {
+          padding: 12px;
+        }
+
+        .compose-card {
+          padding: 0;
+        }
+
+        .preview-item {
+          padding: 12px;
+        }
+      }
+
+      @media (max-width: 940px) {
+        body {
+          padding: 10px;
+          overflow-y: auto;
+        }
+
+        .top {
+          border-radius: 28px;
+        }
+
+        .subtitle {
+          display: none;
+        }
+
+        .workbench {
+          grid-template-columns: minmax(0, 1fr);
+          overflow: visible;
+        }
+
+        .stack {
+          overflow: visible;
+        }
+
+        .preview {
+          min-height: 240px;
+          max-height: 360px;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .top {
+          align-items: stretch;
+          border-radius: 24px;
+          flex-direction: column;
+        }
+
+        .top button {
+          width: 100%;
+        }
+
+        .compose-card {
+          --compose-x: 14px;
+          --compose-avatar: 38px;
+          --compose-gap: 10px;
+        }
+
+        .source-input {
+          min-height: 132px;
+          font-size: 20px;
+        }
+
+        .compose-footer {
+          flex-wrap: wrap;
+        }
+
+        .compose-footer .tool-row:last-child {
+          margin-left: auto;
+        }
+
+        .schedule-grid,
+        .publish-actions {
+          grid-template-columns: 1fr;
+        }
+
+        .tweet-media img,
+        .tweet-media video {
+          height: clamp(118px, 42vw, 152px);
+        }
+      }
+
+      @media (max-height: 760px) and (min-width: 941px) {
+        .source-input {
+          min-height: 132px;
+          max-height: 260px;
+        }
+
+        .preview {
+          min-height: 190px;
+          max-height: 310px;
+        }
+
+        .log {
+          min-height: 72px;
+          max-height: 120px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <div class="brand-mark"><img class="x-logo" src="assets/twitter-x-seeklogo.svg" alt="" aria-hidden="true"></div>
+        <div>
+          <h1>X Native Scheduler</h1>
+        </div>
+      </div>
+      <button id="openX" type="button">打开 X</button>
+    </header>
+
+    <input id="fileInput" class="hidden-input" type="file" accept=".md,.txt,text/markdown,text/plain">
+    <input id="mediaInput" class="hidden-input" type="file" multiple accept="image/*,video/*">
+
+    <div class="workbench">
+      <main class="stack">
+        <section class="card compose-card">
+          <div class="compose-top">
+            <button id="clearDraftTop" class="draft-label" type="button" title="清空当前草稿">清空</button>
+          </div>
+          <div class="compose-main">
+            <div class="compose-avatar"><img class="x-logo" src="assets/twitter-x-seeklogo.svg" alt="" aria-hidden="true"></div>
+            <div>
+              <textarea id="source" class="source-input" spellcheck="false" placeholder="有什么新鲜事？"></textarea>
+            </div>
+          </div>
+          <div id="manualMediaPreview" class="compose-media"></div>
+          <div class="compose-footer">
+            <div class="tool-row">
+              <button id="chooseMediaInline" class="tool-button" type="button" title="添加图片或视频">▧</button>
+              <button id="emojiButton" class="tool-button" type="button" title="插入 emoji">☺</button>
+            </div>
+            <div class="tool-row">
+              <span id="charCount" class="char-count">0 字</span>
+              <button id="importQueue" class="compose-import" type="button">导入</button>
+              <button id="save" class="compose-save" type="button">保存</button>
+            </div>
+          </div>
+          <div id="emojiPanel" class="emoji-panel" aria-label="emoji 输入"></div>
+        </section>
+
+        <section class="card">
+          <div class="section-head">
+            <h2>排期选项</h2>
+            <span class="section-meta">未指定时间时由系统自动分配</span>
+          </div>
+          <div class="schedule-grid">
+            <label class="wide">
+              草稿定时发布（可选）
+              <input id="manualScheduledAt" class="date-time-input" type="text" inputmode="numeric" autocomplete="off" placeholder="yyyy/mm/dd hh:mm">
+            </label>
+            <label>
+              排期开始时间
+              <input id="startAt" type="datetime-local" placeholder="yyyy/mm/dd hh:mm">
+            </label>
+            <label>
+              排期结束时间
+              <input id="endAt" type="datetime-local" placeholder="yyyy/mm/dd hh:mm">
+            </label>
+            <label>
+              发布间隔（分钟）
+              <input id="intervalMinutes" type="number" min="1" step="1" value="60">
+            </label>
+            <label>
+              操作间隔（秒）
+              <input id="delaySeconds" type="number" min="0.6" step="0.1" value="1.2">
+            </label>
+          </div>
+        </section>
+
+        <section class="card media-library">
+          <div class="section-head">
+            <h2>媒体素材</h2>
+            <span class="section-help" title="手动帖可直接绑定媒体；导入帖通过文件名自动匹配素材">?</span>
+          </div>
+          <div class="media-list" id="mediaList"></div>
+        </section>
+      </main>
+
+      <aside class="stack">
+        <section class="card">
+          <div class="section-head">
+            <h2>帖子预览</h2>
+            <span id="queueCount" class="section-meta">0 条</span>
+          </div>
+          <div class="preview" id="previewList"></div>
+        </section>
+
+        <section class="card">
+          <div class="section-head">
+            <h2>发布</h2>
+          </div>
+          <div class="publish-actions">
+            <button id="preview" type="button">预览队列</button>
+            <button id="start" class="primary" type="button">开始</button>
+            <button id="stop" class="danger" type="button">停止</button>
+          </div>
+          <div class="status" id="status">撰写帖子后点「保存」加入队列，也可导入文件自动生成。</div>
+        </section>
+
+        <section class="card">
+          <div class="section-head">
+            <h2>执行日志</h2>
+            <span class="section-meta">运行状态与异常信息</span>
+          </div>
+          <div class="log" id="log"></div>
+        </section>
+      </aside>
+    </div>
+
+    <script src="emoji-data.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

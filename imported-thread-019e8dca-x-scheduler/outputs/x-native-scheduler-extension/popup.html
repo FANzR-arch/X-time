@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>X Native Scheduler Queue</title>
+    <style>
+      body {
+        width: 300px;
+        margin: 0;
+        padding: 14px;
+        background: #f7f8fa;
+        color: #17202a;
+        font: 13px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 15px;
+        line-height: 1.25;
+      }
+      p {
+        margin: 0 0 10px;
+        color: #536471;
+      }
+      button {
+        width: 100%;
+        border: 0;
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: #111820;
+        color: white;
+        font-weight: 650;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #263441;
+      }
+      .status {
+        margin-top: 10px;
+        color: #536471;
+        min-height: 18px;
+      }
+      a {
+        color: #1d9bf0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>X 原生定时队列</h1>
+    <p>打开 x.com 并登录后，点击下面按钮显示页面内队列面板。</p>
+    <button id="toggle">显示 / 隐藏队列面板</button>
+    <div class="status" id="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

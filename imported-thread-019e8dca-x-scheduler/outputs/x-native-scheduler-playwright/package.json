@@ -1,0 +1,15 @@
+{
+  "name": "x-native-scheduler-playwright",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-only Playwright tool for scheduling posts through X's native web scheduler.",
+  "type": "commonjs",
+  "scripts": {
+    "login": "node scripts/login.js",
+    "schedule": "node scripts/schedule-x.js",
+    "check": "node --check scripts/login.js && node --check scripts/schedule-x.js"
+  },
+  "dependencies": {
+    "playwright-core": "latest"
+  }
+}
