@@ -1,3 +1,6 @@
+import "./vendor/emoji-picker-element/index.js";
+import zhCnI18n from "./vendor/emoji-picker-element/i18n/zh_CN.js";
+
 const STORAGE_KEYS = {
   source: "xns.popup.source",
   options: "xns.popup.options",
@@ -13,6 +16,7 @@ const els = {
   chooseMediaInline: document.getElementById("chooseMediaInline"),
   emojiButton: document.getElementById("emojiButton"),
   emojiPanel: document.getElementById("emojiPanel"),
+  emojiPicker: document.getElementById("emojiPicker"),
   clearDraftTop: document.getElementById("clearDraftTop"),
   fileInput: document.getElementById("fileInput"),
   mediaInput: document.getElementById("mediaInput"),
@@ -44,7 +48,6 @@ let localLog = [];
 let persistTimer = null;
 let pastedMediaCounter = 0;
 let editingQueueIndex = null;
-let activeEmojiCategory = "";
 let previewMediaUrls = [];
 
 init();
@@ -52,8 +55,8 @@ init();
 async function init() {
   setDefaultTimes();
   await restoreState();
+  setupEmojiPicker();
   bindEvents();
-  renderEmojiPanel();
   renderManualMediaPreview();
   renderMediaList();
   renderQueue({ validateMedia: false, silent: true });
@@ -70,20 +73,7 @@ function bindEvents() {
   });
   els.emojiButton.addEventListener("click", (event) => {
     const isOpen = els.emojiPanel.classList.toggle("open");
-    if (isOpen) {
-      const btnRect = event.currentTarget.getBoundingClientRect();
-      const panelW = els.emojiPanel.offsetWidth || 308;
-      const gap = 6;
-      let left = btnRect.right - panelW + gap;
-      let top = btnRect.bottom + gap;
-      // Keep panel within viewport
-      if (left < 8) left = 8;
-      if (left + panelW > window.innerWidth - 8) left = window.innerWidth - panelW - 8;
-      if (top + 280 > window.innerHeight) top = btnRect.top - 280 - gap;
-      if (top < 8) top = 8;
-      els.emojiPanel.style.left = `${left}px`;
-      els.emojiPanel.style.top = `${top}px`;
-    }
+    if (isOpen) positionEmojiPanel(event.currentTarget);
   });
   els.clearDraftTop.addEventListener("click", () => clearDraft());
   els.fileInput.addEventListener("change", importFile);
@@ -112,22 +102,16 @@ function bindEvents() {
     });
   }
 
-  els.emojiPanel.addEventListener("click", event => {
-    const categoryButton = event.target.closest("[data-emoji-category]");
-    if (categoryButton) {
-      renderEmojiPanel(categoryButton.dataset.emojiCategory);
-      return;
-    }
-
-    const button = event.target.closest("[data-emoji]");
-    if (!button) return;
-    insertAtCursor(button.dataset.emoji);
-    els.emojiPanel.classList.remove("open");
+  els.emojiPicker.addEventListener("emoji-click", event => {
+    const unicode = event.detail?.unicode;
+    if (!unicode) return;
+    insertAtCursor(unicode);
+    closeEmojiPanel();
   });
 
   document.addEventListener("click", event => {
     if (event.target === els.emojiButton || els.emojiPanel.contains(event.target)) return;
-    els.emojiPanel.classList.remove("open");
+    closeEmojiPanel();
   });
 
   els.manualMediaPreview.addEventListener("click", event => {
@@ -696,35 +680,29 @@ function autoResizeTextarea() {
   el.style.height = `${Math.min(el.scrollHeight, 400)}px`;
 }
 
-function renderEmojiPanel(nextCategoryId = "") {
-  const categories = Array.isArray(window.XNS_EMOJI_CATEGORIES) ? window.XNS_EMOJI_CATEGORIES : [];
-  if (!categories.length) {
-    els.emojiPanel.innerHTML = `<div class="empty-state"><strong>暂无 emoji</strong><span>emoji 数据文件未加载。</span></div>`;
-    return;
-  }
+function setupEmojiPicker() {
+  els.emojiPicker.i18n = zhCnI18n;
+  els.emojiPicker.locale = "zh";
+  els.emojiPicker.dataSource = "vendor/emoji-picker-element-data/zh/emojibase/data.json";
+}
 
-  const activeCategory = categories.find(category => category.id === nextCategoryId)
-    || categories.find(category => category.id === activeEmojiCategory)
-    || categories[0];
-  activeEmojiCategory = activeCategory.id;
+function positionEmojiPanel(trigger) {
+  const btnRect = trigger.getBoundingClientRect();
+  const panelW = els.emojiPanel.offsetWidth || 360;
+  const panelH = els.emojiPanel.offsetHeight || 390;
+  const gap = 6;
+  let left = btnRect.right - panelW + gap;
+  let top = btnRect.bottom + gap;
+  if (left < 8) left = 8;
+  if (left + panelW > window.innerWidth - 8) left = window.innerWidth - panelW - 8;
+  if (top + panelH > window.innerHeight - 8) top = btnRect.top - panelH - gap;
+  if (top < 8) top = 8;
+  els.emojiPanel.style.left = `${left}px`;
+  els.emojiPanel.style.top = `${top}px`;
+}
 
-  els.emojiPanel.innerHTML = `
-    <div class="emoji-tabs">
-      ${categories.map(category => `
-        <button
-          class="emoji-tab${category.id === activeCategory.id ? " active" : ""}"
-          type="button"
-          title="${escapeHtml(category.label)}"
-          data-emoji-category="${escapeHtml(category.id)}"
-        >${category.icon}</button>
-      `).join("")}
-    </div>
-    <div class="emoji-grid">
-      ${activeCategory.items.map(emoji => `
-        <button type="button" data-emoji="${escapeHtml(emoji)}">${emoji}</button>
-      `).join("")}
-    </div>
-  `;
+function closeEmojiPanel() {
+  els.emojiPanel.classList.remove("open");
 }
 
 function insertAtCursor(text) {

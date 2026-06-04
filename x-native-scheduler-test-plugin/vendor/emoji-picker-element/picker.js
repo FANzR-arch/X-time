@@ -1627,8 +1627,8 @@ function createRoot (shadowRoot, props) {
   }
 }
 
-const DEFAULT_DATA_SOURCE = 'https://cdn.jsdelivr.net/npm/emoji-picker-element-data@^1/en/emojibase/data.json';
-const DEFAULT_LOCALE = 'en';
+const DEFAULT_DATA_SOURCE = 'vendor/emoji-picker-element-data/zh/emojibase/data.json';
+const DEFAULT_LOCALE = 'zh';
 
 var enI18n = {
   categoriesLabel: 'Categories',
