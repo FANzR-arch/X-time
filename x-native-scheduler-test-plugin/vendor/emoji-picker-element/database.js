@@ -711,9 +711,8 @@ function cleanEmoji (emoji) {
 }
 
 function warnETag (eTag) {
-  if (!eTag) {
-    console.warn('emoji-picker-element is more efficient if the dataSource server exposes an ETag header.');
-  }
+  // Extension-packaged JSON resources do not expose ETag headers; the checksum
+  // fallback below keeps the local cache valid without noisy console warnings.
 }
 
 const requiredKeys = [

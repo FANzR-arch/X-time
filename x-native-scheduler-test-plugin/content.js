@@ -202,17 +202,180 @@
 
   async function fillComposer(editable, text) {
     await sleep(350);
-    const existing = normalizedText(editable.innerText || editable.value || "");
+    const expected = comparableComposerText(text);
+    const existing = comparableComposerText(getComposerText(editable));
     if (existing) throw new Error("当前发帖框已有内容，请先关闭或清空后再运行。");
 
     editable.focus();
     if (editable.isContentEditable) {
-      document.execCommand("insertText", false, text);
-      editable.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+      await insertContentEditableText(editable, text, expected);
     } else {
       setNativeValue(editable, text);
     }
-    await waitFor(() => normalizedText(editable.innerText || editable.value || "").length > 0, 5_000, "未能写入帖子内容");
+    await waitFor(() => comparableComposerText(getComposerText(editable)).length > 0, 5_000, "未能写入帖子内容");
+    const actual = comparableComposerText(getComposerText(editable));
+    if (actual !== expected) {
+      throw new Error(`X composer text incomplete: wrote ${actual.length}/${expected.length} chars. Stopped before scheduling.`);
+    }
+  }
+
+  async function insertContentEditableText(editable, text, expected) {
+    const strategies = [
+      () => insertTextViaDebugger(editable, text),
+      () => dispatchPasteEvents(editable, text),
+      () => insertTextByLines(editable, text)
+    ];
+
+    for (let index = 0; index < strategies.length; index += 1) {
+      if (index > 0) await clearComposer(editable);
+      try {
+        await strategies[index]();
+        if (await waitForComposerMatch(editable, expected, 2_500)) return;
+      } catch (error) {
+        await addLog(`COMPOSER_WRITE_FALLBACK ${error.message || String(error)}`);
+      }
+    }
+
+    throw new Error("X composer did not accept the full multiline text. Stopped before scheduling.");
+  }
+
+  async function insertTextViaDebugger(editable, text) {
+    focusEditableAtEnd(editable);
+    const response = await chrome.runtime.sendMessage({
+      type: "xns-debugger-insert-text",
+      text
+    });
+    await sleep(500);
+    if (!response?.ok) {
+      throw new Error(response?.error || "debugger insertText rejected");
+    }
+  }
+
+  function dispatchPasteEvents(editable, text) {
+    focusEditableAtEnd(editable);
+    const transfer = new DataTransfer();
+    transfer.setData("text/plain", text);
+    transfer.setData("text/html", textToPasteHtml(text));
+
+    try {
+      editable.dispatchEvent(new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "insertFromPaste",
+        data: text,
+        dataTransfer: transfer
+      }));
+    } catch (_error) {
+      // Some Chromium builds reject dataTransfer on synthetic InputEvent.
+    }
+
+    editable.dispatchEvent(new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: transfer
+    }));
+  }
+
+  async function insertTextByLines(editable, text) {
+    const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+    for (let index = 0; index < lines.length; index += 1) {
+      if (lines[index]) insertPlainText(editable, lines[index]);
+      if (index < lines.length - 1) insertParagraph(editable);
+      await sleep(25);
+    }
+  }
+
+  function insertPlainText(editable, text) {
+    focusEditableAtEnd(editable);
+    document.execCommand("insertText", false, text);
+    dispatchComposerInput(editable, "insertText", text);
+  }
+
+  function insertParagraph(editable) {
+    focusEditableAtEnd(editable);
+    document.execCommand("insertParagraph", false, null);
+    dispatchComposerInput(editable, "insertParagraph");
+  }
+
+  async function clearComposer(editable) {
+    editable.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(editable);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.execCommand("delete", false, null);
+    selection.removeAllRanges();
+    dispatchComposerInput(editable, "deleteContentBackward");
+    await sleep(150);
+  }
+
+  async function waitForComposerMatch(editable, expected, timeoutMs) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const actual = comparableComposerText(getComposerText(editable));
+      if (actual === expected) {
+        await sleep(250);
+        return comparableComposerText(getComposerText(editable)) === expected;
+      }
+      await sleep(100);
+    }
+    return false;
+  }
+
+  function focusEditableAtEnd(editable) {
+    editable.scrollIntoView({ block: "center", inline: "center" });
+    editable.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(editable);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  function dispatchComposerInput(editable, inputType, data) {
+    try {
+      const init = { bubbles: true, inputType };
+      if (typeof data === "string") init.data = data;
+      editable.dispatchEvent(new InputEvent("input", init));
+    } catch (_error) {
+      editable.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  }
+
+  function getComposerText(editable) {
+    return editable.value || editable.innerText || "";
+  }
+
+  function textToPasteHtml(text) {
+    return String(text || "")
+      .replace(/\r\n?/g, "\n")
+      .split(/\n{2,}/)
+      .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+      .join("");
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    }[char]));
+  }
+
+  function comparableComposerText(text) {
+    return String(text || "")
+      .replace(/\u200b/g, "")
+      .replace(/\u00a0/g, " ")
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
   }
 
   async function attachMedia(editable, mediaItems) {

@@ -55,9 +55,11 @@ If the user provides:
 - interval
 - timezone
 
-Then generate timestamps inside that window when possible. If the requested number of posts does not fit, continue generating the Markdown; the plugin will automatically move overflow posts to current time plus 10 minutes, then continue by the configured interval.
+Then generate timestamps inside that window when possible. If the requested number of posts does not fit, continue generating the Markdown; the plugin will automatically continue overflow posts in the next valid daily publishing window.
 
 If the user says "自动排程", omit `scheduled_at` and let the plugin assign times.
+
+When automatic scheduling is requested, the plugin defaults to the daily `08:00-23:00` window, distributes posts evenly, and can optionally add random jitter only to plugin-generated times.
 
 ## Media Rules
 

@@ -10,9 +10,41 @@ const STORAGE_KEYS = {
 
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 const X_LOGO_HTML = '<img class="x-logo" src="assets/twitter-x-seeklogo.svg" alt="" aria-hidden="true">';
+const QUEUE_TEMPLATE = `# X 发帖队列
+
+timezone: Asia/Shanghai
+
+--- post ---
+id: post-001
+scheduled_at: 2026-06-08 09:30
+media: launch-cover.png
+
+第一条帖子正文。这里可以写多行，但不要在正文中使用独立一行的 --- post ---。
+
+--- post ---
+id: post-002
+
+第二条帖子正文。没有 scheduled_at 时，插件会按当前排期规则自动补齐。
+`;
+const AI_QUEUE_PROMPT = `请把我接下来给你的主题/素材改写成适合 X 发布的多条帖子，并只输出一个 Markdown 队列文件内容。
+
+必须遵守以下格式：
+1. 每条帖子必须用独立一行 --- post --- 分隔。
+2. 每条帖子的元数据写在正文前面，可用字段只有 id、scheduled_at、media。
+3. scheduled_at 使用 YYYY-MM-DD HH:mm，例如 2026-06-08 09:30；不确定时间就省略，让插件自动排期。
+4. media 只写文件名，多个文件用英文逗号分隔；没有媒体就省略。
+5. 元数据和正文之间必须空一行。
+6. 正文中不要出现独立一行 --- post ---。
+7. 不要输出解释、表格、代码围栏或额外说明，只输出队列正文。
+
+模板：
+${QUEUE_TEMPLATE}`;
 
 const els = {
   importQueue: document.getElementById("importQueue"),
+  importTextQueue: document.getElementById("importTextQueue"),
+  copyAiPrompt: document.getElementById("copyAiPrompt"),
+  downloadQueueTemplate: document.getElementById("downloadQueueTemplate"),
   chooseMediaInline: document.getElementById("chooseMediaInline"),
   emojiButton: document.getElementById("emojiButton"),
   emojiPanel: document.getElementById("emojiPanel"),
@@ -26,10 +58,19 @@ const els = {
   charCount: document.getElementById("charCount"),
   source: document.getElementById("source"),
   manualScheduledAt: document.getElementById("manualScheduledAt"),
+  scheduleMode: document.getElementById("scheduleMode"),
+  dailyStartTime: document.getElementById("dailyStartTime"),
+  dailyEndTime: document.getElementById("dailyEndTime"),
   startAt: document.getElementById("startAt"),
   endAt: document.getElementById("endAt"),
+  scheduleStrategyInputs: [...document.querySelectorAll('input[name="scheduleStrategy"]')],
+  fixedIntervalField: document.getElementById("fixedIntervalField"),
   intervalMinutes: document.getElementById("intervalMinutes"),
+  jitterEnabled: document.getElementById("jitterEnabled"),
+  jitterMinutes: document.getElementById("jitterMinutes"),
+  jitterMinutesField: document.getElementById("jitterMinutesField"),
   delaySeconds: document.getElementById("delaySeconds"),
+  resetState: document.getElementById("resetState"),
   preview: document.getElementById("preview"),
   save: document.getElementById("save"),
   start: document.getElementById("start"),
@@ -67,6 +108,9 @@ async function init() {
 
 function bindEvents() {
   els.importQueue.addEventListener("click", () => els.fileInput.click());
+  els.importTextQueue.addEventListener("click", importTextQueue);
+  els.copyAiPrompt.addEventListener("click", copyAiPrompt);
+  els.downloadQueueTemplate.addEventListener("click", downloadQueueTemplate);
   els.chooseMediaInline.addEventListener("click", () => {
     els.mediaInput.dataset.attachToDraft = "1";
     els.mediaInput.click();
@@ -78,6 +122,7 @@ function bindEvents() {
   els.clearDraftTop.addEventListener("click", () => clearDraft());
   els.fileInput.addEventListener("change", importFile);
   els.mediaInput.addEventListener("change", importMediaFiles);
+  els.resetState.addEventListener("click", resetPluginState);
   els.preview.addEventListener("click", previewQueue);
   els.save.addEventListener("click", saveState);
   els.start.addEventListener("click", startQueue);
@@ -95,8 +140,21 @@ function bindEvents() {
     updateComposerState();
   });
 
-  for (const input of [els.startAt, els.endAt, els.intervalMinutes, els.delaySeconds]) {
+  const scheduleControls = [
+    els.scheduleMode,
+    els.dailyStartTime,
+    els.dailyEndTime,
+    els.startAt,
+    els.endAt,
+    els.intervalMinutes,
+    els.jitterEnabled,
+    els.jitterMinutes,
+    els.delaySeconds,
+    ...els.scheduleStrategyInputs
+  ];
+  for (const input of scheduleControls) {
     input.addEventListener("change", () => {
+      syncScheduleControls();
       renderQueue({ validateMedia: false, silent: true });
       schedulePersistState();
     });
@@ -145,10 +203,17 @@ async function restoreState() {
 
   const options = saved[STORAGE_KEYS.options] || {};
   if (options.manualScheduledAt) els.manualScheduledAt.value = toDateTimePlaceholderFormat(options.manualScheduledAt);
+  if (options.scheduleMode) els.scheduleMode.value = options.scheduleMode;
+  if (options.dailyStartTime) els.dailyStartTime.value = options.dailyStartTime;
+  if (options.dailyEndTime) els.dailyEndTime.value = options.dailyEndTime;
   if (options.startAt) els.startAt.value = options.startAt;
   if (options.endAt) els.endAt.value = options.endAt;
+  if (options.scheduleStrategy) setScheduleStrategy(options.scheduleStrategy);
   if (options.intervalMinutes) els.intervalMinutes.value = options.intervalMinutes;
+  if (options.jitterMinutes) els.jitterMinutes.value = options.jitterMinutes;
+  els.jitterEnabled.checked = options.jitterEnabled === true || options.jitterEnabled === "true";
   if (options.delaySeconds) els.delaySeconds.value = options.delaySeconds;
+  syncScheduleControls();
 
   queuedPosts = Array.isArray(saved[STORAGE_KEYS.queue])
     ? saved[STORAGE_KEYS.queue].map(hydratePost).filter(Boolean)
@@ -156,13 +221,17 @@ async function restoreState() {
 }
 
 function setDefaultTimes() {
-  const start = new Date();
-  start.setDate(start.getDate() + 1);
-  start.setHours(9, 0, 0, 0);
-  const end = new Date(start.getTime());
-  end.setHours(18, 0, 0, 0);
-  els.startAt.value = toDateTimeLocal(start);
-  els.endAt.value = toDateTimeLocal(end);
+  els.scheduleMode.value = "smart";
+  els.dailyStartTime.value = "08:00";
+  els.dailyEndTime.value = "23:00";
+  els.startAt.value = "";
+  els.endAt.value = "";
+  setScheduleStrategy("even");
+  els.intervalMinutes.value = "60";
+  els.jitterEnabled.checked = false;
+  els.jitterMinutes.value = "5";
+  els.delaySeconds.value = "1.2";
+  syncScheduleControls();
 }
 
 async function persistState() {
@@ -183,31 +252,67 @@ async function importFile(event) {
   els.fileInput.value = "";
   if (!file) return;
 
-  let importedPosts;
   try {
     const text = await file.text();
-    importedPosts = parseSource(text).map((post, index) => normalizeImportedPost(post, index));
-    if (!importedPosts.length) throw new Error("文件中未识别到任何帖子。");
-    schedulePosts(importedPosts, { validateMedia: false });
+    await importQueueText(text, file.name, formatBytes(file.size));
   } catch (error) {
     addLocalLog(`导入失败：${error.message}`);
     setError(error.message);
-    return;
   }
+}
+
+async function importTextQueue() {
+  try {
+    await importQueueText(els.source.value, "粘贴内容");
+  } catch (error) {
+    addLocalLog(`粘贴导入失败：${error.message}`);
+    setError(error.message);
+  }
+}
+
+async function importQueueText(raw, sourceName, sourceDetail = "") {
+  const importedPosts = parseSource(raw).map((post, index) => normalizeImportedPost(post, index));
+  if (!importedPosts.length) throw new Error("未识别到任何帖子。请使用独立一行的 --- post --- 分隔多条内容。");
+  schedulePosts(importedPosts, { validateMedia: false });
 
   queuedPosts = importedPosts;
   clearDraft({ silent: true });
   await persistState();
   renderQueue({ validateMedia: false });
-  addLocalLog(`已导入 ${file.name}，识别 ${queuedPosts.length} 条，${formatBytes(file.size)}`);
+  addLocalLog(`已导入 ${sourceName}，识别 ${queuedPosts.length} 条${sourceDetail ? `，${sourceDetail}` : ""}`);
 
   try {
     schedulePosts(queuedPosts, { validateMedia: true });
-    setStatus(`已导入 ${queuedPosts.length} 条帖子并自动排期。`);
+    setStatus(`已导入 ${queuedPosts.length} 条帖子，可调整排期规则后预览或开始。`);
   } catch (error) {
     setError(error.message);
     addLocalLog(`导入完成，媒体校验提醒：${error.message}`);
   }
+}
+
+async function copyAiPrompt() {
+  try {
+    await navigator.clipboard.writeText(AI_QUEUE_PROMPT.trim());
+    addLocalLog("已复制 AI 队列提示词。");
+    setStatus("AI 队列提示词已复制。");
+  } catch (error) {
+    addLocalLog(`复制提示词失败：${error.message}`);
+    setError("无法写入剪贴板，请检查浏览器剪贴板权限。");
+  }
+}
+
+function downloadQueueTemplate() {
+  const blob = new Blob([QUEUE_TEMPLATE], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "x-post-queue-template.md";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  addLocalLog("已下载队列模板。");
+  setStatus("队列模板已下载。");
 }
 
 function importMediaFiles(event) {
@@ -296,7 +401,7 @@ async function saveState() {
 
   try {
     schedulePosts(queuedPosts, { validateMedia: true });
-    addLocalLog(`保存并自动排期：${queuedPosts.length} 条。`);
+    addLocalLog(`保存并更新队列预览：${queuedPosts.length} 条。`);
     setStatus(hasDraft ? `草稿已保存，队列共 ${queuedPosts.length} 条。点击「开始」即可发布。` : `已重新排期：${queuedPosts.length} 条。`);
   } catch (error) {
     addLocalLog(`保存完成，媒体校验提醒：${error.message}`);
@@ -409,18 +514,77 @@ async function stopQueue() {
   }
 }
 
+async function resetPluginState() {
+  const confirmed = window.confirm("确定重置插件状态？这会清空当前草稿、队列、已选媒体、排期设置和日志，但不会删除 X 页面里已经生成的草稿。");
+  if (!confirmed) return;
+
+  clearTimeout(persistTimer);
+  persistTimer = null;
+
+  try {
+    await requestStopCurrentRun();
+  } catch (_error) {
+    // Reset should still clear local plugin state even if the X tab is unavailable.
+  }
+
+  selectedMediaFiles = new Map();
+  queuedPosts = [];
+  manualMediaRefs = [];
+  lastItems = [];
+  localLog = [];
+  pastedMediaCounter = 0;
+  editingQueueIndex = null;
+
+  els.source.value = "";
+  els.manualScheduledAt.value = "";
+  els.fileInput.value = "";
+  els.mediaInput.value = "";
+  delete els.mediaInput.dataset.attachToDraft;
+
+  setDefaultTimes();
+  closeEmojiPanel();
+  clearPreviewMediaUrls();
+  renderManualMediaPreview();
+  renderMediaList();
+  renderQueue({ validateMedia: false, silent: true });
+  updateComposerState();
+  els.log.textContent = "";
+
+  await chrome.storage.local.remove(Object.values(STORAGE_KEYS));
+  setStatus("插件状态已重置。X 页面中已生成的草稿如需删除，请在 X 页面手动关闭或删除。", "success");
+}
+
+async function requestStopCurrentRun() {
+  const saved = await chrome.storage.local.get(STORAGE_KEYS.runState);
+  const runState = saved[STORAGE_KEYS.runState];
+  if (!runState?.running) return;
+
+  const tab = await getActiveXTab();
+  if (!tab) return;
+
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: "xns-stop-queue" });
+  } catch (_error) {
+    // The content script may already be gone after a page refresh.
+  }
+}
+
 function createManualPost(existingPost = null) {
   const text = els.source.value.trim();
   if (!text && !manualMediaRefs.length) throw new Error("当前草稿为空。");
 
   const manualDate = els.manualScheduledAt.value ? parseDateTimeLocal(els.manualScheduledAt.value) : null;
   if (els.manualScheduledAt.value && !manualDate) throw new Error("当前草稿时间无效。");
+  const keepsDocumentTime = existingPost
+    && existingPost.sourceType === "import"
+    && !existingPost.lockedTime
+    && sameMinute(manualDate, existingPost.scheduledAt);
 
   return {
     id: existingPost?.id || nextQueuedPostId(),
     text,
     scheduledAt: manualDate,
-    lockedTime: Boolean(manualDate),
+    lockedTime: Boolean(manualDate) && !keepsDocumentTime,
     mediaRefs: [...manualMediaRefs],
     sourceType: existingPost?.sourceType || "manual"
   };
@@ -440,43 +604,39 @@ function normalizeImportedPost(post, index) {
 function schedulePosts(posts, { validateMedia = true } = {}) {
   if (!posts.length) return [];
 
-  const options = getOptions();
-  const mode = "smart";
-  const intervalMs = Math.max(1, Number(options.intervalMinutes || 60)) * 60 * 1000;
-  let nextAutoTime = parseDateTimeLocal(options.startAt);
-  let nextFallbackTime = new Date(Date.now() + 10 * 60 * 1000);
-  const endAt = parseDateTimeLocal(options.endAt);
-
-  if (!nextAutoTime && posts.some(post => !post.scheduledAt || (mode === "auto" && !post.lockedTime))) {
-    throw new Error("需要设置自动排期开始时间。");
-  }
-
+  const config = normalizeScheduleOptions(getOptions());
   const now = Date.now();
-  const items = posts.map((post, index) => {
+  const autoPosts = [];
+
+  posts.forEach((post, index) => {
     const text = String(post.text || "").trim();
     if (!text && !(post.mediaRefs || []).length) throw new Error(`第 ${index + 1} 条内容为空。`);
 
-    let date = post.scheduledAt;
-    if (mode === "document" && post.sourceType === "import" && !date) {
-      throw new Error(`第 ${index + 1} 条缺少 scheduled_at。`);
+    if (config.mode === "document" && !post.scheduledAt) {
+      throw new Error(`第 ${index + 1} 条缺少 scheduled_at 或手动定时时间。`);
     }
-    if (mode === "auto" && !post.lockedTime) date = null;
-    if (!date) {
-      date = nextAutoTime;
-      nextAutoTime = new Date(nextAutoTime.getTime() + intervalMs);
-    }
+
+    const explicitDate = getExplicitScheduleDate(post, config);
+    if (!explicitDate) autoPosts.push({ post, index });
+  });
+
+  const autoAssignments = assignAutomaticDates(autoPosts, config, now);
+  const items = posts.map((post, index) => {
+    const text = String(post.text || "").trim();
+    const assignment = autoAssignments.get(index);
+    let date = assignment?.date || getExplicitScheduleDate(post, config);
+    let scheduleSource = assignment ? "系统自动" : getExplicitScheduleSource(post);
+    let jittered = Boolean(assignment?.jittered);
+    let scheduleNote = "";
+
+    if (assignment?.scheduleNote) scheduleNote = assignment.scheduleNote;
     if (!date || Number.isNaN(date.getTime())) throw new Error(`第 ${index + 1} 条时间无效。`);
 
-    let scheduleNote = "";
     if (date.getTime() <= now + 60_000) {
-      date = nextFallbackTime;
-      nextFallbackTime = new Date(nextFallbackTime.getTime() + intervalMs);
-      scheduleNote = "已过期，自动顺延";
-    }
-    if (endAt && date.getTime() > endAt.getTime()) {
-      date = nextFallbackTime;
-      nextFallbackTime = new Date(nextFallbackTime.getTime() + intervalMs);
-      scheduleNote = "超出时段，自动顺延";
+      date = nextWindowStart(new Date(now + 60_000), config);
+      scheduleSource = "系统自动";
+      jittered = false;
+      scheduleNote = "已过期，顺延到窗口";
     }
 
     const mediaFiles = validateMedia ? resolveMediaFiles(post, index) : collectAvailableMediaFiles(post);
@@ -487,6 +647,8 @@ function schedulePosts(posts, { validateMedia = true } = {}) {
       text,
       date,
       queueIndex: index,
+      scheduleSource,
+      jittered,
       scheduleNote,
       mediaRefs: [...(post.mediaRefs || [])],
       mediaFiles
@@ -494,6 +656,290 @@ function schedulePosts(posts, { validateMedia = true } = {}) {
   });
 
   return items.sort((a, b) => a.date.getTime() - b.date.getTime());
+}
+
+function normalizeScheduleOptions(options) {
+  const dailyStart = parseClockTime(options.dailyStartTime || "08:00");
+  const dailyEnd = parseClockTime(options.dailyEndTime || "23:00");
+  if (!dailyStart || !dailyEnd) throw new Error("每日发布窗口格式无效。");
+  if (dailyStart.totalMinutes >= dailyEnd.totalMinutes) throw new Error("每日结束时间必须晚于每日开始时间。");
+
+  const startAt = parseOptionalDateTime(options.startAt, "排期开始时间");
+  const endAt = parseOptionalDateTime(options.endAt, "排期结束时间");
+  if (startAt && endAt && endAt.getTime() <= startAt.getTime()) {
+    throw new Error("排期结束时间必须晚于排期开始时间。");
+  }
+
+  const mode = ["smart", "auto", "document"].includes(options.scheduleMode) ? options.scheduleMode : "smart";
+  const strategy = options.scheduleStrategy === "fixed" ? "fixed" : "even";
+  const intervalMs = Math.max(1, Number(options.intervalMinutes || 60)) * 60 * 1000;
+  const jitterMinutes = Math.max(1, Number(options.jitterMinutes || 5));
+
+  return {
+    mode,
+    strategy,
+    dailyStart,
+    dailyEnd,
+    startAt,
+    endAt,
+    intervalMs,
+    jitterEnabled: Boolean(options.jitterEnabled),
+    jitterMinutes
+  };
+}
+
+function parseOptionalDateTime(value, label) {
+  if (!value) return null;
+  const date = parseDateTimeLocal(value);
+  if (!date) throw new Error(`${label}无效。`);
+  return date;
+}
+
+function parseClockTime(value) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return {
+    hours,
+    minutes,
+    totalMinutes: hours * 60 + minutes
+  };
+}
+
+function getExplicitScheduleDate(post, config) {
+  if (config.mode === "auto" && !post.lockedTime) return null;
+  return post.scheduledAt || null;
+}
+
+function getExplicitScheduleSource(post) {
+  if (post.lockedTime || post.sourceType === "manual") return "手动指定";
+  return "文档指定";
+}
+
+function assignAutomaticDates(autoPosts, config, now) {
+  if (!autoPosts.length) return new Map();
+  return config.strategy === "fixed"
+    ? assignFixedAutomaticDates(autoPosts, config, now)
+    : assignEvenAutomaticDates(autoPosts, config, now);
+}
+
+function assignEvenAutomaticDates(autoPosts, config, now) {
+  const assignments = new Map();
+  const range = getAutomaticRange(config, now);
+  let windows = collectWindowsUntil(range.start, range.end, config);
+
+  if (!windows.length) {
+    const firstOverflowStart = nextWindowStart(range.start, config);
+    windows = [createWindowForDate(firstOverflowStart, config, true)];
+  }
+
+  ensureWindowCapacity(windows, autoPosts.length, config);
+
+  let previousAutoDate = null;
+  for (let order = 0; order < autoPosts.length; order += 1) {
+    const ratio = autoPosts.length === 1 ? 0 : order / (autoPosts.length - 1);
+    const baseDate = roundToMinute(dateAtWindowRatio(windows, ratio));
+    const window = findWindowForDate(windows, baseDate) || windows[windows.length - 1];
+    const jitterResult = applyScheduleJitter(baseDate, autoPosts[order].post, autoPosts[order].index, config, previousAutoDate);
+    const date = jitterResult.date;
+    previousAutoDate = date;
+    assignments.set(autoPosts[order].index, {
+      date,
+      jittered: jitterResult.jittered,
+      scheduleNote: window.overflow ? "顺延到次日窗口" : ""
+    });
+  }
+
+  return assignments;
+}
+
+function assignFixedAutomaticDates(autoPosts, config, now) {
+  const assignments = new Map();
+  const range = getAutomaticRange(config, now);
+  let cursor = nextWindowStart(range.start, config);
+  let overflowStarted = false;
+  let previousAutoDate = null;
+
+  for (const autoPost of autoPosts) {
+    if (!overflowStarted && cursor.getTime() > range.end.getTime()) {
+      cursor = startOfNextDailyWindow(range.end, config);
+      overflowStarted = true;
+    }
+
+    const baseDate = nextWindowStart(cursor, config);
+    const isOverflow = overflowStarted || baseDate.getTime() > range.end.getTime();
+    const jitterResult = applyScheduleJitter(baseDate, autoPost.post, autoPost.index, config, previousAutoDate);
+    const date = jitterResult.date;
+    previousAutoDate = date;
+    assignments.set(autoPost.index, {
+      date,
+      jittered: jitterResult.jittered,
+      scheduleNote: isOverflow ? "顺延到次日窗口" : ""
+    });
+
+    cursor = new Date(baseDate.getTime() + config.intervalMs);
+  }
+
+  return assignments;
+}
+
+function getAutomaticRange(config, now) {
+  const configuredStart = config.startAt || getDefaultAutomaticStart(config);
+  const minimumStart = new Date(now + 60_000);
+  const start = configuredStart.getTime() <= minimumStart.getTime() ? minimumStart : configuredStart;
+  const normalizedStart = nextWindowStart(start, config);
+  const end = config.endAt || windowEndForDate(normalizedStart, config);
+  return { start: normalizedStart, end };
+}
+
+function getDefaultAutomaticStart(config) {
+  const start = new Date();
+  start.setDate(start.getDate() + 1);
+  start.setHours(config.dailyStart.hours, config.dailyStart.minutes, 0, 0);
+  return start;
+}
+
+function collectWindowsUntil(start, end, config) {
+  const windows = [];
+  const cursor = startOfDay(start);
+  const endDay = startOfDay(end);
+  let guard = 0;
+
+  while (cursor.getTime() <= endDay.getTime() && guard < 370) {
+    const dayWindow = createWindowForDate(cursor, config, false);
+    let windowStart = dayWindow.start;
+    let windowEnd = dayWindow.end;
+    if (isSameDate(cursor, start) && start.getTime() > windowStart.getTime()) windowStart = new Date(start);
+    if (isSameDate(cursor, end) && end.getTime() < windowEnd.getTime()) windowEnd = new Date(end);
+    if (windowEnd.getTime() >= windowStart.getTime()) {
+      windows.push({ start: roundToMinute(windowStart), end: roundToMinute(windowEnd), overflow: false });
+    }
+    cursor.setDate(cursor.getDate() + 1);
+    guard += 1;
+  }
+
+  return windows;
+}
+
+function ensureWindowCapacity(windows, requiredCount, config) {
+  let guard = 0;
+  while (windowCapacity(windows) < requiredCount && guard < 370) {
+    const lastWindow = windows[windows.length - 1];
+    const nextStart = startOfNextDailyWindow(lastWindow.end, config);
+    windows.push(createWindowForDate(nextStart, config, true));
+    guard += 1;
+  }
+}
+
+function windowCapacity(windows) {
+  return windows.reduce((sum, window) => {
+    return sum + Math.floor((window.end.getTime() - window.start.getTime()) / 60_000) + 1;
+  }, 0);
+}
+
+function dateAtWindowRatio(windows, ratio) {
+  const totalDuration = windows.reduce((sum, window) => sum + Math.max(0, window.end.getTime() - window.start.getTime()), 0);
+  if (totalDuration <= 0) return new Date(windows[0].start);
+
+  let offset = totalDuration * ratio;
+  for (const window of windows) {
+    const duration = Math.max(0, window.end.getTime() - window.start.getTime());
+    if (offset <= duration) return new Date(window.start.getTime() + offset);
+    offset -= duration;
+  }
+
+  return new Date(windows[windows.length - 1].end);
+}
+
+function findWindowForDate(windows, date) {
+  return windows.find(window => date.getTime() >= window.start.getTime() && date.getTime() <= window.end.getTime());
+}
+
+function applyScheduleJitter(baseDate, post, index, config, previousAutoDate) {
+  if (!config.jitterEnabled || config.jitterMinutes < 1) {
+    return { date: baseDate, jittered: false };
+  }
+
+  const offsetMinutes = deterministicJitterMinutes(`${post.id || index}|${index}|${formatDateTime(baseDate)}`, config.jitterMinutes);
+  let date = new Date(baseDate.getTime() + offsetMinutes * 60_000);
+  const dayWindow = createWindowForDate(baseDate, config, false);
+  if (date.getTime() < dayWindow.start.getTime()) date = new Date(dayWindow.start);
+  if (date.getTime() > dayWindow.end.getTime()) date = new Date(dayWindow.end);
+  if (previousAutoDate && date.getTime() <= previousAutoDate.getTime()) {
+    const nextMinute = new Date(previousAutoDate.getTime() + 60_000);
+    if (nextMinute.getTime() <= dayWindow.end.getTime()) date = nextMinute;
+  }
+
+  return {
+    date: roundToMinute(date),
+    jittered: offsetMinutes !== 0
+  };
+}
+
+function deterministicJitterMinutes(seed, maxMinutes) {
+  let hash = 2166136261;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  const span = maxMinutes * 2 + 1;
+  return (Math.abs(hash) % span) - maxMinutes;
+}
+
+function nextWindowStart(date, config) {
+  const rounded = roundUpToMinute(date);
+  const dayWindow = createWindowForDate(rounded, config, false);
+  if (rounded.getTime() <= dayWindow.start.getTime()) return dayWindow.start;
+  if (rounded.getTime() <= dayWindow.end.getTime()) return rounded;
+  return startOfNextDailyWindow(rounded, config);
+}
+
+function createWindowForDate(date, config, overflow) {
+  const start = startOfDay(date);
+  start.setHours(config.dailyStart.hours, config.dailyStart.minutes, 0, 0);
+  const end = startOfDay(date);
+  end.setHours(config.dailyEnd.hours, config.dailyEnd.minutes, 0, 0);
+  return { start, end, overflow };
+}
+
+function windowEndForDate(date, config) {
+  return createWindowForDate(date, config, false).end;
+}
+
+function startOfNextDailyWindow(date, config) {
+  const next = startOfDay(date);
+  next.setDate(next.getDate() + 1);
+  next.setHours(config.dailyStart.hours, config.dailyStart.minutes, 0, 0);
+  return next;
+}
+
+function startOfDay(date) {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function isSameDate(left, right) {
+  return left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate();
+}
+
+function roundToMinute(date) {
+  const next = new Date(date);
+  next.setSeconds(0, 0);
+  return next;
+}
+
+function roundUpToMinute(date) {
+  const next = new Date(date);
+  if (next.getSeconds() || next.getMilliseconds()) {
+    next.setMinutes(next.getMinutes() + 1);
+  }
+  next.setSeconds(0, 0);
+  return next;
 }
 
 function resolveMediaFiles(post, index) {
@@ -556,7 +1002,6 @@ function renderPreview(items) {
 
   els.previewList.innerHTML = items.map((item, index) => {
     const media = item.mediaRefs.length ? escapeHtml(item.mediaRefs.join(", ")) : "无媒体";
-    const note = item.scheduleNote ? `<span class="pill warning-pill">${escapeHtml(item.scheduleNote)}</span>` : "";
     const editingClass = editingQueueIndex === item.queueIndex ? " is-editing" : "";
     return `
       <article class="preview-item${editingClass}" data-edit-queue-index="${item.queueIndex}">
@@ -564,7 +1009,10 @@ function renderPreview(items) {
         <div>
           <div class="tweet-head">
             <div class="account">X Scheduler <span>@queue · 已排期</span></div>
-            <div class="time-badge">${formatDateTime(item.date)}</div>
+            <div class="tweet-head-badges">
+              <span class="time-badge count-badge">${index + 1}/${items.length}</span>
+              <span class="time-badge">${formatDateTime(item.date)}</span>
+            </div>
           </div>
           <div class="tweet-body">${escapeHtml(item.text)}</div>
           ${renderPreviewMedia(item.mediaFiles)}
@@ -572,19 +1020,20 @@ function renderPreview(items) {
             <span class="pill">${item.text.length} 字</span>
             <span class="pill">${escapeHtml(item.id)}</span>
             <span class="pill">${media}</span>
-            ${note}
-          </div>
-          <div class="tweet-actions">
-            <span>回复</span>
-            <span>转发</span>
-            <span>喜欢</span>
-            <span>${index + 1}/${items.length}</span>
-            <button class="preview-delete" type="button" data-delete-queue-index="${item.queueIndex}">删除</button>
+            ${renderScheduleBadges(item)}
+            <button class="preview-delete pill-delete" type="button" data-delete-queue-index="${item.queueIndex}">删除</button>
           </div>
         </div>
       </article>
     `;
   }).join("");
+}
+
+function renderScheduleBadges(item) {
+  const badges = [`<span class="pill source-pill">${escapeHtml(item.scheduleSource || "系统自动")}</span>`];
+  if (item.jittered) badges.push(`<span class="pill">随机波动</span>`);
+  if (item.scheduleNote) badges.push(`<span class="pill warning-pill">${escapeHtml(item.scheduleNote)}</span>`);
+  return badges.join("");
 }
 
 function renderEmptyPreview(message = "保存草稿或导入文件后，队列将显示在此处。") {
@@ -762,18 +1211,17 @@ async function deleteQueuedPost(queueIndex) {
 function loadQueuedPostForEdit(queueIndex) {
   if (!Number.isInteger(queueIndex) || queueIndex < 0 || queueIndex >= queuedPosts.length) return;
   const post = queuedPosts[queueIndex];
-  const scheduledItem = schedulePosts(queuedPosts, { validateMedia: false })
-    .find(item => item.queueIndex === queueIndex);
 
   editingQueueIndex = queueIndex;
   els.source.value = post.text || "";
-  els.manualScheduledAt.value = toDateTimePlaceholderFormat(post.scheduledAt || scheduledItem?.date || new Date());
+  els.manualScheduledAt.value = post.scheduledAt ? toDateTimePlaceholderFormat(post.scheduledAt) : "";
   manualMediaRefs = [...(post.mediaRefs || [])];
   renderManualMediaPreview();
   renderQueue({ validateMedia: false, silent: true });
   updateComposerState();
   schedulePersistState();
-  setStatus(`正在编辑 ${post.id || `第 ${queueIndex + 1} 条`}，保存后会替换右侧原帖。`);
+  const timeHint = post.scheduledAt ? "当前时间会随保存保留。" : "当前帖仍保持系统自动排期。";
+  setStatus(`正在编辑 ${post.id || `第 ${queueIndex + 1} 条`}，保存后会替换右侧原帖。${timeHint}`);
 }
 
 function nextQueuedPostId() {
@@ -863,7 +1311,7 @@ async function ensureContentScript(tabId) {
 }
 
 function parseSource(raw) {
-  const text = String(raw || "").trim();
+  const text = unwrapQueueText(String(raw || "").trim());
   if (!text) return [];
 
   if (/^---\s*post\s*---\s*$/im.test(text)) {
@@ -871,6 +1319,11 @@ function parseSource(raw) {
   }
 
   return parseLoosePosts(text);
+}
+
+function unwrapQueueText(text) {
+  const match = text.match(/^```(?:md|markdown)?\s*\n([\s\S]*?)\n```\s*$/i);
+  return match ? match[1].trim() : text;
 }
 
 function parsePostBlocks(raw) {
@@ -942,11 +1395,37 @@ function parseLoosePosts(raw) {
 function getOptions() {
   return {
     manualScheduledAt: els.manualScheduledAt.value,
+    scheduleMode: els.scheduleMode.value,
+    dailyStartTime: els.dailyStartTime.value,
+    dailyEndTime: els.dailyEndTime.value,
     startAt: els.startAt.value,
     endAt: els.endAt.value,
+    scheduleStrategy: getScheduleStrategy(),
     intervalMinutes: els.intervalMinutes.value,
+    jitterEnabled: els.jitterEnabled.checked,
+    jitterMinutes: els.jitterMinutes.value,
     delaySeconds: els.delaySeconds.value
   };
+}
+
+function getScheduleStrategy() {
+  return els.scheduleStrategyInputs.find(input => input.checked)?.value || "even";
+}
+
+function setScheduleStrategy(strategy) {
+  const safeStrategy = strategy === "fixed" ? "fixed" : "even";
+  for (const input of els.scheduleStrategyInputs) {
+    input.checked = input.value === safeStrategy;
+  }
+}
+
+function syncScheduleControls() {
+  const isFixed = getScheduleStrategy() === "fixed";
+  const jitterEnabled = els.jitterEnabled.checked;
+  els.intervalMinutes.disabled = !isFixed;
+  els.fixedIntervalField.classList.toggle("schedule-field-disabled", !isFixed);
+  els.jitterMinutes.disabled = !jitterEnabled;
+  els.jitterMinutesField.classList.toggle("schedule-field-disabled", !jitterEnabled);
 }
 
 async function renderRunState(runState) {
@@ -1032,6 +1511,15 @@ function isMatchingDate(date, y, m, d, hh, mm) {
     && date.getDate() === d
     && date.getHours() === hh
     && date.getMinutes() === mm;
+}
+
+function sameMinute(left, right) {
+  if (!(left instanceof Date) || !(right instanceof Date)) return false;
+  return left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate()
+    && left.getHours() === right.getHours()
+    && left.getMinutes() === right.getMinutes();
 }
 
 function toDateTimeLocal(date) {
