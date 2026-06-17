@@ -3,12 +3,18 @@ import zhCnI18n from "./vendor/emoji-picker-element/i18n/zh_CN.js";
 
 const XnsTimezone = globalThis.XnsTimezone;
 if (!XnsTimezone) throw new Error("timezone-core.js 未加载。");
+const XnsReply = globalThis.XnsReply;
+if (!XnsReply) throw new Error("reply-core.js 未加载。");
 
 const STORAGE_KEYS = {
   source: "xns.popup.source",
+  replySource: "xns.popup.replySource",
   options: "xns.popup.options",
   queue: "xns.popup.queue",
-  runState: "xns.runState"
+  replyQueue: "xns.popup.replyQueue",
+  workspaceMode: "xns.popup.workspaceMode",
+  runState: "xns.runState",
+  replyRunState: "xns.replyRunState"
 };
 
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
@@ -45,8 +51,37 @@ const AI_QUEUE_PROMPT = `请把我接下来给你的主题/素材改写成适合
 
 模板：
 ${QUEUE_TEMPLATE}`;
+const REPLY_QUEUE_TEMPLATE = `# X 回复队列
+
+timezone: Asia/Shanghai
+
+--- reply ---
+id: reply-001
+url: https://x.com/example/status/1234567890123456789
+
+第一条回复正文。
+
+--- reply ---
+id: reply-002
+url: https://x.com/example/status/2234567890123456789
+scheduled_at: 2026-06-19 15:30
+
+第二条回复正文。`;
+const AI_REPLY_PROMPT = `请把我接下来提供的多组 X 帖子链接和回复文案整理成批量回复队列，并只输出 Markdown 正文。
+
+规则：
+1. 每条回复使用独立一行 --- reply --- 分隔。
+2. 元数据只允许 id、url、scheduled_at；url 必填。
+3. 元数据和回复正文之间必须空一行，回复正文必填。
+4. scheduled_at 使用 YYYY-MM-DD HH:mm，按 timezone 指定的目标时区解释；不确定时间时省略。
+5. 不要输出代码围栏、解释或额外说明。
+
+模板：
+${REPLY_QUEUE_TEMPLATE}`;
 
 const els = {
+  originalMode: document.getElementById("originalMode"),
+  replyMode: document.getElementById("replyMode"),
   importQueue: document.getElementById("importQueue"),
   importTextQueue: document.getElementById("importTextQueue"),
   copyAiPrompt: document.getElementById("copyAiPrompt"),
@@ -59,12 +94,15 @@ const els = {
   fileInput: document.getElementById("fileInput"),
   mediaInput: document.getElementById("mediaInput"),
   mediaList: document.getElementById("mediaList"),
+  mediaLibraryCard: document.getElementById("mediaLibraryCard"),
   manualMediaPreview: document.getElementById("manualMediaPreview"),
   queueCount: document.getElementById("queueCount"),
   charCount: document.getElementById("charCount"),
   source: document.getElementById("source"),
   deliveryModeInputs: [...document.querySelectorAll('input[name="deliveryMode"]')],
   deliveryModeHint: document.getElementById("deliveryModeHint"),
+  deliveryModeGroup: document.getElementById("deliveryModeGroup"),
+  manualScheduleGroup: document.getElementById("manualScheduleGroup"),
   targetTimezone: document.getElementById("targetTimezone"),
   targetTimezoneLabel: document.getElementById("targetTimezoneLabel"),
   browserTimezoneLabel: document.getElementById("browserTimezoneLabel"),
@@ -89,12 +127,22 @@ const els = {
   stop: document.getElementById("stop"),
   openX: document.getElementById("openX"),
   status: document.getElementById("status"),
+  queueFormatTitle: document.getElementById("queueFormatTitle"),
+  queueFormatMeta: document.getElementById("queueFormatMeta"),
+  formatChipPrimary: document.getElementById("formatChipPrimary"),
+  formatChipSecondary: document.getElementById("formatChipSecondary"),
+  formatChipOptional: document.getElementById("formatChipOptional"),
+  previewTitle: document.getElementById("previewTitle"),
   previewList: document.getElementById("previewList"),
   log: document.getElementById("log")
 };
 
 let selectedMediaFiles = new Map();
 let queuedPosts = [];
+let queuedReplies = [];
+let replyWarnings = [];
+let workspaceMode = "original";
+const workspaceSources = { original: "", reply: "" };
 let manualMediaRefs = [];
 let lastItems = [];
 let localLog = [];
@@ -109,6 +157,7 @@ async function init() {
   renderTimezoneOptions();
   setDefaultTimes();
   await restoreState();
+  applyWorkspaceMode({ persist: false });
   setupEmojiPicker();
   bindEvents();
   renderManualMediaPreview();
@@ -121,6 +170,8 @@ async function init() {
 }
 
 function bindEvents() {
+  els.originalMode.addEventListener("click", () => switchWorkspaceMode("original"));
+  els.replyMode.addEventListener("click", () => switchWorkspaceMode("reply"));
   els.importQueue.addEventListener("click", () => els.fileInput.click());
   els.importTextQueue.addEventListener("click", importTextQueue);
   els.copyAiPrompt.addEventListener("click", copyAiPrompt);
@@ -144,6 +195,7 @@ function bindEvents() {
   els.openX.addEventListener("click", () => chrome.tabs.create({ url: "https://x.com/home" }));
 
   els.source.addEventListener("input", () => {
+    workspaceSources[workspaceMode] = els.source.value;
     updateComposerState();
     schedulePersistState();
   });
@@ -215,8 +267,18 @@ function bindEvents() {
 }
 
 async function restoreState() {
-  const saved = await chrome.storage.local.get([STORAGE_KEYS.source, STORAGE_KEYS.options, STORAGE_KEYS.queue]);
-  if (saved[STORAGE_KEYS.source]) els.source.value = saved[STORAGE_KEYS.source];
+  const saved = await chrome.storage.local.get([
+    STORAGE_KEYS.source,
+    STORAGE_KEYS.replySource,
+    STORAGE_KEYS.options,
+    STORAGE_KEYS.queue,
+    STORAGE_KEYS.replyQueue,
+    STORAGE_KEYS.workspaceMode
+  ]);
+  workspaceSources.original = saved[STORAGE_KEYS.source] || "";
+  workspaceSources.reply = saved[STORAGE_KEYS.replySource] || "";
+  workspaceMode = saved[STORAGE_KEYS.workspaceMode] === "reply" ? "reply" : "original";
+  els.source.value = workspaceSources[workspaceMode];
 
   const options = saved[STORAGE_KEYS.options] || {};
   els.targetTimezone.value = options.targetTimezone || "Asia/Shanghai";
@@ -237,6 +299,9 @@ async function restoreState() {
   queuedPosts = Array.isArray(saved[STORAGE_KEYS.queue])
     ? saved[STORAGE_KEYS.queue].map(hydratePost).filter(Boolean)
     : [];
+  queuedReplies = Array.isArray(saved[STORAGE_KEYS.replyQueue])
+    ? saved[STORAGE_KEYS.replyQueue].map(hydratePost).filter(Boolean)
+    : [];
 }
 
 function setDefaultTimes() {
@@ -256,16 +321,71 @@ function setDefaultTimes() {
 }
 
 async function persistState() {
+  workspaceSources[workspaceMode] = els.source.value;
   await chrome.storage.local.set({
-    [STORAGE_KEYS.source]: els.source.value,
+    [STORAGE_KEYS.source]: workspaceSources.original,
+    [STORAGE_KEYS.replySource]: workspaceSources.reply,
     [STORAGE_KEYS.options]: getOptions(),
-    [STORAGE_KEYS.queue]: queuedPosts.map(serializePost)
+    [STORAGE_KEYS.queue]: queuedPosts.map(serializePost),
+    [STORAGE_KEYS.replyQueue]: queuedReplies.map(serializePost),
+    [STORAGE_KEYS.workspaceMode]: workspaceMode
   });
 }
 
 function schedulePersistState() {
   clearTimeout(persistTimer);
   persistTimer = setTimeout(persistState, 250);
+}
+
+async function switchWorkspaceMode(mode) {
+  const nextMode = mode === "reply" ? "reply" : "original";
+  if (nextMode === workspaceMode) return;
+  workspaceSources[workspaceMode] = els.source.value;
+  workspaceMode = nextMode;
+  els.source.value = workspaceSources[workspaceMode];
+  editingQueueIndex = null;
+  manualMediaRefs = [];
+  applyWorkspaceMode({ persist: false });
+  renderManualMediaPreview();
+  renderQueue({ validateMedia: false, silent: true });
+  updateComposerState();
+  await persistState();
+}
+
+function applyWorkspaceMode({ persist = true } = {}) {
+  const replyMode = isReplyMode();
+  els.originalMode.classList.toggle("is-active", !replyMode);
+  els.replyMode.classList.toggle("is-active", replyMode);
+  for (const element of document.querySelectorAll(".original-only")) {
+    element.classList.toggle("mode-hidden", replyMode);
+  }
+  if (replyMode) setDeliveryMode("schedule");
+  els.source.placeholder = replyMode
+    ? "粘贴多组目标帖子链接和回复内容，然后点击「解析粘贴」"
+    : "有什么新鲜事？";
+  els.queueFormatTitle.textContent = replyMode ? "回复队列格式" : "原创队列格式";
+  els.queueFormatMeta.textContent = replyMode ? "链接 + 纯文字回复" : "AI 生成可直接粘贴";
+  els.formatChipPrimary.textContent = replyMode ? "--- reply --- 分隔" : "--- post --- 分隔";
+  els.formatChipSecondary.textContent = replyMode ? "url 必填" : "元数据后空一行";
+  els.formatChipOptional.textContent = replyMode ? "scheduled_at 可选" : "scheduled_at / media 可选";
+  els.previewTitle.textContent = replyMode ? "回复预览" : "帖子预览";
+  els.importQueue.textContent = replyMode ? "导入回复" : "导入";
+  els.importTextQueue.textContent = replyMode ? "解析回复" : "解析粘贴";
+  syncScheduleControls();
+  if (persist) schedulePersistState();
+}
+
+function isReplyMode() {
+  return workspaceMode === "reply";
+}
+
+function getActiveQueue() {
+  return isReplyMode() ? queuedReplies : queuedPosts;
+}
+
+function replaceActiveQueue(items) {
+  if (isReplyMode()) queuedReplies = items;
+  else queuedPosts = items;
 }
 
 async function importFile(event) {
@@ -292,6 +412,10 @@ async function importTextQueue() {
 }
 
 async function importQueueText(raw, sourceName, sourceDetail = "") {
+  if (isReplyMode()) {
+    await importReplyQueueText(raw, sourceName, sourceDetail);
+    return;
+  }
   const declaredTimezone = getDeliveryMode() === "schedule" ? validateDeclaredTimezone(raw) : "";
   const importedPosts = parseSource(raw, { lenientSchedule: getDeliveryMode() === "draft" }).map((post, index) => normalizeImportedPost(post, index));
   if (!importedPosts.length) throw new Error("未识别到任何帖子。请使用独立一行的 --- post --- 分隔多条内容。");
@@ -314,11 +438,26 @@ async function importQueueText(raw, sourceName, sourceDetail = "") {
   }
 }
 
+async function importReplyQueueText(raw, sourceName, sourceDetail = "") {
+  const imported = XnsReply.parseReplyQueue(raw, { targetTimezone: getTargetTimezone() });
+  if (!imported.length) throw new Error("未识别到任何回复。请使用独立一行的 --- reply --- 分隔多条内容。");
+  replyWarnings = [...(imported.warnings || [])];
+  const normalized = imported.map((item, index) => normalizeImportedReply(item, index));
+  schedulePosts(normalized, { validateMedia: false });
+  queuedReplies = normalized;
+  clearDraft({ silent: true });
+  await persistState();
+  renderQueue({ validateMedia: false });
+  addLocalLog(`已导入回复队列 ${sourceName}，识别 ${queuedReplies.length} 条${sourceDetail ? `，${sourceDetail}` : ""}`);
+  const warningText = replyWarnings.length ? `；${replyWarnings.join("；")}` : "";
+  setStatus(`已导入 ${queuedReplies.length} 条回复，目标时区 ${getTargetTimezone()}${warningText}`);
+}
+
 async function copyAiPrompt() {
   try {
-    await navigator.clipboard.writeText(AI_QUEUE_PROMPT.trim());
-    addLocalLog("已复制 AI 队列提示词。");
-    setStatus("AI 队列提示词已复制。");
+    await navigator.clipboard.writeText((isReplyMode() ? AI_REPLY_PROMPT : AI_QUEUE_PROMPT).trim());
+    addLocalLog(`已复制${isReplyMode() ? "回复" : "原创"}队列提示词。`);
+    setStatus(`${isReplyMode() ? "回复" : "原创"}队列提示词已复制。`);
   } catch (error) {
     addLocalLog(`复制提示词失败：${error.message}`);
     setError("无法写入剪贴板，请检查浏览器剪贴板权限。");
@@ -326,17 +465,17 @@ async function copyAiPrompt() {
 }
 
 function downloadQueueTemplate() {
-  const blob = new Blob([QUEUE_TEMPLATE], { type: "text/markdown;charset=utf-8" });
+  const blob = new Blob([isReplyMode() ? REPLY_QUEUE_TEMPLATE : QUEUE_TEMPLATE], { type: "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = "x-post-queue-template.md";
+  link.download = isReplyMode() ? "x-reply-queue-template.md" : "x-post-queue-template.md";
   document.body.appendChild(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
-  addLocalLog("已下载队列模板。");
-  setStatus("队列模板已下载。");
+  addLocalLog(`已下载${isReplyMode() ? "回复" : "原创"}队列模板。`);
+  setStatus(`${isReplyMode() ? "回复" : "原创"}队列模板已下载。`);
 }
 
 function importMediaFiles(event) {
@@ -368,6 +507,7 @@ function importMediaFiles(event) {
 }
 
 function handleSourcePaste(event) {
+  if (isReplyMode()) return;
   const items = [...(event.clipboardData?.items || [])];
   const imageItem = items.find(item => item.kind === "file" && item.type.startsWith("image/"));
   if (!imageItem) return;
@@ -393,6 +533,10 @@ function handleSourcePaste(event) {
 }
 
 async function saveState() {
+  if (isReplyMode()) {
+    setError("回复排期请使用「解析回复」导入链接和回复正文。");
+    return;
+  }
   const hasDraft = Boolean(els.source.value.trim()) || manualMediaRefs.length > 0;
   if (!hasDraft && !queuedPosts.length) {
     setError("请输入一条帖子，或导入一个队列文件。");
@@ -445,8 +589,9 @@ function previewQueue() {
 
   try {
     renderQueue({ validateMedia: true });
-    addLocalLog(`${getDeliveryMode() === "draft" ? "草稿预览" : "排期预览"}通过：${queuedPosts.length} 条。`);
-    setStatus(`${getDeliveryMode() === "draft" ? "草稿预览" : "排期预览"}通过：${queuedPosts.length} 条。`);
+    const label = isReplyMode() ? "回复排期预览" : getDeliveryMode() === "draft" ? "草稿预览" : "排期预览";
+    addLocalLog(`${label}通过：${getActiveQueue().length} 条。`);
+    setStatus(`${label}通过：${getActiveQueue().length} 条。`);
   } catch (error) {
     addLocalLog(`预览失败：${error.message}`);
     setError(error.message);
@@ -462,12 +607,17 @@ async function startQueue() {
   const deliveryMode = getDeliveryMode();
   let items;
   try {
-    items = schedulePosts(queuedPosts, { validateMedia: true });
-    if (!items.length) throw new Error("队列为空。请先保存帖子或导入文件。");
+    items = schedulePosts(getActiveQueue(), { validateMedia: true });
+    if (!items.length) throw new Error(`队列为空。请先${isReplyMode() ? "导入回复" : "保存帖子或导入文件"}。`);
     validateRunMediaPayload(items);
   } catch (error) {
     addLocalLog(`构建队列失败：${error.message}`);
     setError(error.message);
+    return;
+  }
+
+  if (isReplyMode()) {
+    setError("回复队列后台编排尚未初始化，请刷新扩展后重试。");
     return;
   }
 
@@ -528,6 +678,10 @@ async function startQueue() {
 }
 
 async function stopQueue() {
+  if (isReplyMode()) {
+    setError("当前没有正在运行的回复队列。");
+    return;
+  }
   const tab = await getActiveXTab();
   if (!tab) {
     addLocalLog("停止失败：未找到 x.com / twitter.com 标签页。");
@@ -560,6 +714,10 @@ async function resetPluginState() {
 
   selectedMediaFiles = new Map();
   queuedPosts = [];
+  queuedReplies = [];
+  replyWarnings = [];
+  workspaceSources.original = "";
+  workspaceSources.reply = "";
   manualMediaRefs = [];
   lastItems = [];
   localLog = [];
@@ -635,6 +793,20 @@ function normalizeImportedPost(post, index) {
   };
 }
 
+function normalizeImportedReply(reply, index) {
+  return {
+    id: reply.id || `reply-${String(index + 1).padStart(3, "0")}`,
+    text: reply.text || "",
+    scheduledAt: reply.scheduledAtText ? parseHumanDateTime(reply.scheduledAtText) : null,
+    lockedTime: false,
+    mediaRefs: [],
+    sourceType: "import",
+    itemType: "reply",
+    targetUrl: reply.targetUrl,
+    targetStatusId: reply.targetStatusId
+  };
+}
+
 function schedulePosts(posts, { validateMedia = true } = {}) {
   if (!posts.length) return [];
   if (getDeliveryMode() === "draft") {
@@ -686,6 +858,9 @@ function schedulePosts(posts, { validateMedia = true } = {}) {
     return {
       id: post.id || `post-${String(index + 1).padStart(3, "0")}`,
       text,
+      itemType: post.itemType || "post",
+      targetUrl: post.targetUrl || "",
+      targetStatusId: post.targetStatusId || "",
       date,
       dateMs,
       targetTimezone: config.timezone,
@@ -713,6 +888,9 @@ function buildDraftItems(posts, { validateMedia = true } = {}) {
     return {
       id: post.id || `post-${String(index + 1).padStart(3, "0")}`,
       text,
+      itemType: post.itemType || "post",
+      targetUrl: post.targetUrl || "",
+      targetStatusId: post.targetStatusId || "",
       date: null,
       dateMs: null,
       targetTimezone: getTargetTimezone(),
@@ -1058,13 +1236,13 @@ function validateRunMediaPayload(items) {
 function renderQueue({ validateMedia = false, silent = false } = {}) {
   let items = [];
   try {
-    items = schedulePosts(queuedPosts, { validateMedia });
+    items = schedulePosts(getActiveQueue(), { validateMedia });
     lastItems = items;
     renderPreview(items);
     updateQueueCount(items.length);
   } catch (error) {
     renderPreview(lastItems);
-    updateQueueCount(queuedPosts.length);
+    updateQueueCount(getActiveQueue().length);
     if (!silent) setError(error.message);
     if (!silent) throw error;
   }
@@ -1082,8 +1260,12 @@ function renderPreview(items) {
     const media = item.mediaRefs.length ? escapeHtml(item.mediaRefs.join(", ")) : "无媒体";
     const editingClass = editingQueueIndex === item.queueIndex ? " is-editing" : "";
     const isDraftItem = item.deliveryMode === "draft";
+    const editAttribute = isReplyMode() ? "" : ` data-edit-queue-index="${item.queueIndex}"`;
+    const targetLine = item.itemType === "reply"
+      ? `<div class="input-hint">目标帖：${escapeHtml(item.targetUrl)}</div>`
+      : "";
     return `
-      <article class="preview-item${editingClass}" data-edit-queue-index="${item.queueIndex}">
+      <article class="preview-item${editingClass}"${editAttribute}>
         <div class="avatar">${PLUGIN_LOGO_HTML}</div>
         <div>
           <div class="tweet-head">
@@ -1094,12 +1276,13 @@ function renderPreview(items) {
               ${isDraftItem ? "" : `<span class="time-badge">本机 ${escapeHtml(XnsTimezone.formatEpochInZone(item.dateMs, getBrowserTimezone()))}</span>`}
             </div>
           </div>
+          ${targetLine}
           <div class="tweet-body">${escapeHtml(item.text)}</div>
           ${renderPreviewMedia(item.mediaFiles)}
           <div class="pill-row">
             <span class="pill">${item.text.length} 字</span>
             <span class="pill">${escapeHtml(item.id)}</span>
-            <span class="pill">${media}</span>
+            ${item.itemType === "reply" ? `<span class="pill">回复 ${escapeHtml(item.targetStatusId)}</span>` : `<span class="pill">${media}</span>`}
             ${renderScheduleBadges(item)}
             <button class="preview-delete pill-delete" type="button" data-delete-queue-index="${item.queueIndex}">删除</button>
           </div>
@@ -1118,7 +1301,7 @@ function renderScheduleBadges(item) {
 
 function renderEmptyPreview(message = "保存草稿或导入文件后，队列将显示在此处。") {
   clearPreviewMediaUrls();
-  const title = getDeliveryMode() === "draft" ? "暂无草稿预览" : "暂无排期预览";
+  const title = isReplyMode() ? "暂无回复预览" : getDeliveryMode() === "draft" ? "暂无草稿预览" : "暂无排期预览";
   els.previewList.innerHTML = `
     <div class="empty-state">
       <strong>${title}</strong>
@@ -1200,7 +1383,7 @@ function updateComposerState() {
   const text = els.source.value.trim();
   els.charCount.textContent = `${text.length} 字`;
   els.save.classList.toggle("ready", Boolean(text) || manualMediaRefs.length > 0);
-  updateQueueCount(queuedPosts.length);
+  updateQueueCount(getActiveQueue().length);
   autoResizeTextarea();
 }
 
@@ -1246,12 +1429,13 @@ function insertAtCursor(text) {
   schedulePersistState();
 }
 
-function updateQueueCount(count = queuedPosts.length) {
+function updateQueueCount(count = getActiveQueue().length) {
   els.queueCount.textContent = `${count} 条`;
 }
 
 function clearDraft({ silent = false } = {}) {
   els.source.value = "";
+  workspaceSources[workspaceMode] = "";
   els.manualScheduledAt.value = "";
   manualMediaRefs = [];
   editingQueueIndex = null;
@@ -1271,8 +1455,11 @@ function removeDraftMedia(name) {
 }
 
 async function deleteQueuedPost(queueIndex) {
-  if (!Number.isInteger(queueIndex) || queueIndex < 0 || queueIndex >= queuedPosts.length) return;
-  const [removed] = queuedPosts.splice(queueIndex, 1);
+  const queue = getActiveQueue();
+  if (!Number.isInteger(queueIndex) || queueIndex < 0 || queueIndex >= queue.length) return;
+  const nextQueue = [...queue];
+  const [removed] = nextQueue.splice(queueIndex, 1);
+  replaceActiveQueue(nextQueue);
   if (editingQueueIndex === queueIndex) {
     editingQueueIndex = null;
     els.source.value = "";
@@ -1286,10 +1473,11 @@ async function deleteQueuedPost(queueIndex) {
   renderQueue({ validateMedia: false });
   updateComposerState();
   addLocalLog(`删除队列帖子：${removed?.id || queueIndex + 1}`);
-  setStatus(`已删除 1 条帖子，队列剩余 ${queuedPosts.length} 条。`);
+  setStatus(`已删除 1 条${isReplyMode() ? "回复" : "帖子"}，队列剩余 ${getActiveQueue().length} 条。`);
 }
 
 function loadQueuedPostForEdit(queueIndex) {
+  if (isReplyMode()) return;
   if (!Number.isInteger(queueIndex) || queueIndex < 0 || queueIndex >= queuedPosts.length) return;
   const post = queuedPosts[queueIndex];
 
@@ -1321,7 +1509,10 @@ function serializePost(post) {
     scheduledAt: post.scheduledAt ? post.scheduledAt.toISOString() : null,
     lockedTime: Boolean(post.lockedTime),
     mediaRefs: [...(post.mediaRefs || [])],
-    sourceType: post.sourceType || "import"
+    sourceType: post.sourceType || "import",
+    itemType: post.itemType || "post",
+    targetUrl: post.targetUrl || "",
+    targetStatusId: post.targetStatusId || ""
   };
 }
 
@@ -1333,7 +1524,10 @@ function hydratePost(post) {
     scheduledAt: post.scheduledAt ? new Date(post.scheduledAt) : null,
     lockedTime: Boolean(post.lockedTime),
     mediaRefs: Array.isArray(post.mediaRefs) ? post.mediaRefs : [],
-    sourceType: post.sourceType || "import"
+    sourceType: post.sourceType || "import",
+    itemType: post.itemType || "post",
+    targetUrl: post.targetUrl || "",
+    targetStatusId: post.targetStatusId || ""
   };
 }
 
@@ -1341,6 +1535,10 @@ async function prepareOutboundItems(items) {
   return Promise.all(items.map(async item => ({
     id: item.id,
     text: item.text,
+    itemType: item.itemType || "post",
+    targetUrl: item.targetUrl || "",
+    targetStatusId: item.targetStatusId || "",
+    targetTimezone: item.targetTimezone || getTargetTimezone(),
     deliveryMode: item.deliveryMode || getDeliveryMode(),
     dateMs: item.dateMs ?? null,
     media: await Promise.all(item.mediaFiles.map(fileToPayload))
@@ -1543,6 +1741,7 @@ function getOptions() {
 }
 
 function getDeliveryMode() {
+  if (isReplyMode()) return "schedule";
   return els.deliveryModeInputs.find(input => input.checked)?.value === "draft" ? "draft" : "schedule";
 }
 

@@ -254,6 +254,32 @@
         overflow: hidden;
       }
 
+      .workspace-mode-tabs {
+        display: flex;
+        gap: 8px;
+        padding: 0 18px 14px;
+      }
+
+      .workspace-mode-tab {
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--surface);
+        color: var(--muted);
+        padding: 9px 16px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .workspace-mode-tab.is-active {
+        background: var(--text);
+        border-color: var(--text);
+        color: #fff;
+      }
+
+      .mode-hidden {
+        display: none !important;
+      }
+
       .stack {
         display: grid;
         min-width: 0;
@@ -1232,6 +1258,11 @@
     <input id="fileInput" class="hidden-input" type="file" accept=".md,.txt,text/markdown,text/plain">
     <input id="mediaInput" class="hidden-input" type="file" multiple accept="image/*,video/*">
 
+    <nav class="workspace-mode-tabs" aria-label="排期类型">
+      <button id="originalMode" class="workspace-mode-tab is-active" type="button">原创排期</button>
+      <button id="replyMode" class="workspace-mode-tab" type="button">回复排期</button>
+    </nav>
+
     <div class="workbench">
       <main class="stack">
         <section class="card compose-card">
@@ -1243,13 +1274,13 @@
           <div id="manualMediaPreview" class="compose-media"></div>
           <div class="compose-footer">
             <div class="tool-row">
-              <button id="chooseMediaInline" class="tool-button" type="button" title="添加图片或视频">▧</button>
-              <button id="emojiButton" class="tool-button" type="button" title="插入 emoji">☺</button>
+              <button id="chooseMediaInline" class="tool-button original-only" type="button" title="添加图片或视频">▧</button>
+              <button id="emojiButton" class="tool-button original-only" type="button" title="插入 emoji">☺</button>
             </div>
             <div class="tool-row">
               <span id="charCount" class="char-count">0 字</span>
               <button id="importQueue" class="compose-import" type="button">导入</button>
-              <button id="save" class="compose-save" type="button">保存</button>
+              <button id="save" class="compose-save original-only" type="button">保存</button>
             </div>
           </div>
           <div id="emojiPanel" class="emoji-panel" aria-label="emoji 输入">
@@ -1264,13 +1295,13 @@
 
         <section class="card queue-format-card">
           <div class="section-head">
-            <h2>队列格式</h2>
-            <span class="section-meta">AI 生成可直接粘贴</span>
+            <h2 id="queueFormatTitle">原创队列格式</h2>
+            <span id="queueFormatMeta" class="section-meta">AI 生成可直接粘贴</span>
           </div>
           <div class="format-rules" aria-label="队列格式规则">
-            <span class="format-chip">--- post --- 分隔</span>
-            <span class="format-chip">元数据后空一行</span>
-            <span class="format-chip">scheduled_at / media 可选</span>
+            <span id="formatChipPrimary" class="format-chip">--- post --- 分隔</span>
+            <span id="formatChipSecondary" class="format-chip">元数据后空一行</span>
+            <span id="formatChipOptional" class="format-chip">scheduled_at / media 可选</span>
           </div>
           <div class="format-actions">
             <button id="copyAiPrompt" type="button" title="复制给 AI 的队列生成规则">复制 AI 提示词</button>
@@ -1285,7 +1316,7 @@
             <span class="section-meta">默认 08:00-23:00 自动分配</span>
           </div>
           <div class="schedule-grid">
-            <div class="schedule-group">
+            <div id="deliveryModeGroup" class="schedule-group original-only">
               <div class="schedule-group-title">目标时区</div>
               <label class="wide">
                 <select id="targetTimezone" aria-label="目标时区"></select>
@@ -1311,7 +1342,7 @@
               </label>
             </div>
 
-            <div class="schedule-group schedule-only">
+            <div id="manualScheduleGroup" class="schedule-group schedule-only original-only">
               <label class="wide">
                 <span>草稿定时发布（可选）<span class="help-icon" data-tip="留空则保存后由系统自动排期。">?</span></span>
                 <input id="manualScheduledAt" class="date-time-input" type="text" inputmode="numeric" autocomplete="off" placeholder="yyyy/mm/dd hh:mm">
@@ -1388,7 +1419,7 @@
           </div>
         </section>
 
-        <section class="card media-library">
+        <section id="mediaLibraryCard" class="card media-library original-only">
           <div class="section-head">
             <h2>媒体素材</h2>
             <span class="section-help" title="手动帖可直接绑定媒体；导入帖通过文件名自动匹配素材">?</span>
@@ -1400,7 +1431,7 @@
       <aside class="stack">
         <section class="card">
           <div class="section-head">
-            <h2>帖子预览</h2>
+            <h2 id="previewTitle">帖子预览</h2>
             <span id="queueCount" class="section-meta">0 条</span>
           </div>
           <div class="preview" id="previewList"></div>
