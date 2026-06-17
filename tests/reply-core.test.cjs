@@ -72,6 +72,16 @@ test("resume does not requeue scheduled items", () => {
   assert.equal(resumed.currentIndex, 1);
 });
 
+test("stop marks the run as stopping without changing item completion", () => {
+  const state = reply.createReplyRunState([{ id: "a" }, { id: "b" }]);
+  const advanced = reply.markReplyScheduled(state, "a", 1000);
+  const stopping = reply.markReplyStopping(advanced, 2000);
+  assert.equal(stopping.status, "stopping");
+  assert.equal(stopping.items[0].status, "scheduled");
+  assert.equal(stopping.items[1].status, "queued");
+  assert.equal(stopping.updatedAt, 2000);
+});
+
 test("only accepts explicit schedule action labels", () => {
   for (const label of ["Schedule", "Schedule reply", "定时发送", "安排", "排程"]) {
     assert.equal(reply.isSafeScheduleAction(label), true, label);

@@ -122,6 +122,7 @@ const els = {
   delaySeconds: document.getElementById("delaySeconds"),
   resetState: document.getElementById("resetState"),
   preview: document.getElementById("preview"),
+  resume: document.getElementById("resume"),
   save: document.getElementById("save"),
   start: document.getElementById("start"),
   stop: document.getElementById("stop"),
@@ -189,6 +190,7 @@ function bindEvents() {
   els.mediaInput.addEventListener("change", importMediaFiles);
   els.resetState.addEventListener("click", resetPluginState);
   els.preview.addEventListener("click", previewQueue);
+  els.resume.addEventListener("click", resumeReplyQueue);
   els.save.addEventListener("click", saveState);
   els.start.addEventListener("click", startQueue);
   els.stop.addEventListener("click", stopQueue);
@@ -260,9 +262,9 @@ function bindEvents() {
   });
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === "local" && changes[STORAGE_KEYS.runState]) {
-      renderRunState(changes[STORAGE_KEYS.runState].newValue);
-    }
+    if (areaName !== "local") return;
+    if (!isReplyMode() && changes[STORAGE_KEYS.runState]) renderRunState(changes[STORAGE_KEYS.runState].newValue);
+    if (isReplyMode() && changes[STORAGE_KEYS.replyRunState]) renderRunState(changes[STORAGE_KEYS.replyRunState].newValue);
   });
 }
 
@@ -350,6 +352,7 @@ async function switchWorkspaceMode(mode) {
   renderQueue({ validateMedia: false, silent: true });
   updateComposerState();
   await persistState();
+  await renderRunState();
 }
 
 function applyWorkspaceMode({ persist = true } = {}) {
@@ -358,6 +361,9 @@ function applyWorkspaceMode({ persist = true } = {}) {
   els.replyMode.classList.toggle("is-active", replyMode);
   for (const element of document.querySelectorAll(".original-only")) {
     element.classList.toggle("mode-hidden", replyMode);
+  }
+  for (const element of document.querySelectorAll(".reply-only")) {
+    element.classList.toggle("mode-hidden", !replyMode);
   }
   if (replyMode) setDeliveryMode("schedule");
   els.source.placeholder = replyMode
@@ -617,11 +623,15 @@ async function startQueue() {
   }
 
   if (isReplyMode()) {
-    setError("回复队列后台编排尚未初始化，请刷新扩展后重试。");
-    return;
+    const existing = (await chrome.storage.local.get(STORAGE_KEYS.replyRunState))[STORAGE_KEYS.replyRunState];
+    const completed = existing?.items?.filter((item) => item.status === "scheduled").length || 0;
+    if (["failed", "stopping"].includes(existing?.status) && completed > 0) {
+      setError(`已有 ${completed} 条回复完成。请点击「从失败项继续」，避免重复排期。`);
+      return;
+    }
   }
 
-  addLocalLog(`准备${deliveryMode === "draft" ? "保存草稿" : "开始排期"}：${items.length} 条，媒体 ${countMedia(items)} 个，总媒体大小 ${formatBytes(totalMediaBytes(items))}`);
+  addLocalLog(`准备${isReplyMode() ? "回复排期" : deliveryMode === "draft" ? "保存草稿" : "开始排期"}：${items.length} 条，媒体 ${countMedia(items)} 个，总媒体大小 ${formatBytes(totalMediaBytes(items))}`);
   const tab = await getActiveXTab();
   if (!tab) {
     addLocalLog("未找到 x.com / twitter.com 标签页。");
@@ -630,17 +640,23 @@ async function startQueue() {
   }
 
   addLocalLog(`目标标签页：${tab.url || "(unknown url)"}`);
-  try {
-    await ensureContentScript(tab.id);
-  } catch (error) {
-    addLocalLog(`页面脚本注入失败：${error.message || String(error)}`);
-    setError("无法向 X 页面注入脚本。请刷新 x.com 页面，或确认扩展有 x.com 访问权限。");
-    return;
+  if (!isReplyMode()) {
+    try {
+      await ensureContentScript(tab.id);
+    } catch (error) {
+      addLocalLog(`页面脚本注入失败：${error.message || String(error)}`);
+      setError("无法向 X 页面注入脚本。请刷新 x.com 页面，或确认扩展有 x.com 访问权限。");
+      return;
+    }
   }
 
   await persistState();
   renderPreview(items);
-  setStatus(deliveryMode === "draft" ? "正在准备媒体并发送草稿队列，请不要关闭这个窗口。" : "正在准备媒体并发送排期队列，请不要关闭这个窗口。");
+  setStatus(isReplyMode()
+    ? "正在发送回复队列到后台，请保持目标 X 标签页打开。"
+    : deliveryMode === "draft"
+      ? "正在准备媒体并发送草稿队列，请不要关闭这个窗口。"
+      : "正在准备媒体并发送排期队列，请不要关闭这个窗口。");
 
   let outboundItems;
   try {
@@ -653,15 +669,20 @@ async function startQueue() {
   }
 
   try {
-    addLocalLog("发送队列到 x.com 页面脚本。");
-    const response = await chrome.tabs.sendMessage(tab.id, {
-      type: "xns-start-queue",
-      items: outboundItems,
-      options: {
-        deliveryMode,
-        delayMs: Math.max(600, Number(els.delaySeconds.value || 1.2) * 1000)
-      }
-    });
+    const delayMs = Math.max(600, Number(els.delaySeconds.value || 1.2) * 1000);
+    addLocalLog(isReplyMode() ? "发送回复队列到扩展后台。" : "发送队列到 x.com 页面脚本。");
+    const response = isReplyMode()
+      ? await chrome.runtime.sendMessage({
+        type: "xns-start-reply-queue",
+        tabId: tab.id,
+        items: outboundItems,
+        delayMs
+      })
+      : await chrome.tabs.sendMessage(tab.id, {
+        type: "xns-start-queue",
+        items: outboundItems,
+        options: { deliveryMode, delayMs }
+      });
 
     if (!response || !response.ok) {
       addLocalLog(`页面脚本拒绝：${response?.error || "无响应内容"}`);
@@ -669,8 +690,12 @@ async function startQueue() {
       return;
     }
 
-    addLocalLog("页面脚本已接受队列，开始执行。");
-    setStatus(deliveryMode === "draft" ? "草稿队列已发送到 X 页面执行。请保持 x.com 标签页打开。" : "排期队列已发送到 X 页面执行。请保持 x.com 标签页打开。");
+    addLocalLog(`${isReplyMode() ? "扩展后台" : "页面脚本"}已接受队列，开始执行。`);
+    setStatus(isReplyMode()
+      ? "回复队列已启动。后台会逐条打开目标帖子并使用 X 原生排期。"
+      : deliveryMode === "draft"
+        ? "草稿队列已发送到 X 页面执行。请保持 x.com 标签页打开。"
+        : "排期队列已发送到 X 页面执行。请保持 x.com 标签页打开。");
   } catch (error) {
     addLocalLog(`发送失败：${error.message || String(error)}`);
     setError("页面脚本未响应，或媒体数据过大。请刷新 x.com 后重试；大视频建议用 Playwright CLI。");
@@ -679,7 +704,13 @@ async function startQueue() {
 
 async function stopQueue() {
   if (isReplyMode()) {
-    setError("当前没有正在运行的回复队列。");
+    const response = await chrome.runtime.sendMessage({ type: "xns-stop-reply-queue" });
+    if (!response?.ok) {
+      setError(response?.error || "停止回复队列失败。");
+      return;
+    }
+    addLocalLog("已发送回复队列停止请求。");
+    setStatus("已发送停止请求，当前步骤结束后不再继续。");
     return;
   }
   const tab = await getActiveXTab();
@@ -697,6 +728,22 @@ async function stopQueue() {
     addLocalLog(`停止请求失败：${error.message || String(error)}`);
     setError("停止请求未发送成功，请检查 x.com 标签页是否还打开。");
   }
+}
+
+async function resumeReplyQueue() {
+  if (!isReplyMode()) return;
+  const tab = await getActiveXTab();
+  if (!tab) {
+    setError("请先打开已登录的 x.com 标签页，再恢复回复队列。");
+    return;
+  }
+  const response = await chrome.runtime.sendMessage({ type: "xns-resume-reply-queue", tabId: tab.id });
+  if (!response?.ok) {
+    setError(response?.error || "恢复回复队列失败。");
+    return;
+  }
+  addLocalLog("已从失败项恢复回复队列。");
+  await renderRunState(response.state);
 }
 
 async function resetPluginState() {
@@ -744,6 +791,12 @@ async function resetPluginState() {
 }
 
 async function requestStopCurrentRun() {
+  const replySaved = await chrome.storage.local.get(STORAGE_KEYS.replyRunState);
+  const replyState = replySaved[STORAGE_KEYS.replyRunState];
+  if (replyState && ["running", "failed"].includes(replyState.status)) {
+    await chrome.runtime.sendMessage({ type: "xns-stop-reply-queue" });
+  }
+
   const saved = await chrome.storage.local.get(STORAGE_KEYS.runState);
   const runState = saved[STORAGE_KEYS.runState];
   if (!runState?.running) return;
@@ -1797,12 +1850,16 @@ function syncScheduleControls() {
 }
 
 async function renderRunState(runState) {
-  const state = runState || (await chrome.storage.local.get(STORAGE_KEYS.runState))[STORAGE_KEYS.runState];
+  const key = isReplyMode() ? STORAGE_KEYS.replyRunState : STORAGE_KEYS.runState;
+  const state = runState || (await chrome.storage.local.get(key))[key];
   if (!state) return;
 
+  const replyProgress = isReplyMode() && Array.isArray(state.items)
+    ? `${state.items.filter((item) => item.status === "scheduled").length}/${state.items.length}`
+    : "";
   const showProgress = state.status === "running" && state.progress;
-  const progress = showProgress ? `${state.progress.current || 0}/${state.progress.total || 0}` : "";
-  const statusType = state.status === "error" ? "error" : state.status === "done" ? "success" : "info";
+  const progress = replyProgress || (showProgress ? `${state.progress.current || 0}/${state.progress.total || 0}` : "");
+  const statusType = ["error", "failed"].includes(state.status) ? "error" : state.status === "done" ? "success" : "info";
   setStatus(progress ? `${state.message} (${progress})` : state.message, statusType);
   renderLog(Array.isArray(state.log) ? state.log : []);
 }

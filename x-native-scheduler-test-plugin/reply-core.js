@@ -122,6 +122,8 @@
       delayMs: Math.max(600, Number(delayMs || 1200)),
       currentIndex: 0,
       error: "",
+      message: "回复队列已创建。",
+      log: [],
       createdAt: now,
       updatedAt: now,
       items: items.map((item) => ({
@@ -182,6 +184,16 @@
     };
   }
 
+  function markReplyStopping(state, now = Date.now()) {
+    return {
+      ...state,
+      status: "stopping",
+      message: "收到停止请求，当前步骤完成后不再继续。",
+      updatedAt: now,
+      items: state.items.map((item) => ({ ...item }))
+    };
+  }
+
   function updateItem(state, id, updater, statePatch) {
     const index = state.items.findIndex((item) => item.id === id);
     if (index < 0) throw new Error(`找不到回复任务：${id}`);
@@ -202,6 +214,7 @@
     markReplyProcessing,
     markReplyScheduled,
     markReplyFailed,
+    markReplyStopping,
     resumeReplyRunState,
     isSafeScheduleAction
   };
