@@ -103,6 +103,7 @@ const els = {
   deliveryModeHint: document.getElementById("deliveryModeHint"),
   deliveryModeGroup: document.getElementById("deliveryModeGroup"),
   manualScheduleGroup: document.getElementById("manualScheduleGroup"),
+  timezoneSearch: document.getElementById("timezoneSearch"),
   targetTimezone: document.getElementById("targetTimezone"),
   targetTimezoneLabel: document.getElementById("targetTimezoneLabel"),
   browserTimezoneLabel: document.getElementById("browserTimezoneLabel"),
@@ -202,6 +203,7 @@ function bindEvents() {
     schedulePersistState();
   });
   els.source.addEventListener("paste", handleSourcePaste);
+  els.timezoneSearch.addEventListener("input", () => renderTimezoneOptions(els.timezoneSearch.value));
 
   els.manualScheduledAt.addEventListener("change", () => {
     schedulePersistState();
@@ -377,6 +379,9 @@ function applyWorkspaceMode({ persist = true } = {}) {
   els.previewTitle.textContent = replyMode ? "回复预览" : "帖子预览";
   els.importQueue.textContent = replyMode ? "导入回复" : "导入";
   els.importTextQueue.textContent = replyMode ? "解析回复" : "解析粘贴";
+  setStatus(replyMode
+    ? "导入或粘贴多组目标链接和回复内容，再预览并开始排期。"
+    : "撰写帖子后点「保存」加入队列，也可导入文件自动生成。");
   syncScheduleControls();
   if (persist) schedulePersistState();
 }
@@ -1352,13 +1357,16 @@ function renderScheduleBadges(item) {
   return badges.join("");
 }
 
-function renderEmptyPreview(message = "保存草稿或导入文件后，队列将显示在此处。") {
+function renderEmptyPreview(message = "") {
   clearPreviewMediaUrls();
   const title = isReplyMode() ? "暂无回复预览" : getDeliveryMode() === "draft" ? "暂无草稿预览" : "暂无排期预览";
+  const detail = message || (isReplyMode()
+    ? "导入或解析回复队列后，目标链接、正文和双时区时间会显示在此处。"
+    : "保存草稿或导入文件后，队列将显示在此处。");
   els.previewList.innerHTML = `
     <div class="empty-state">
       <strong>${title}</strong>
-      <span>${escapeHtml(message)}</span>
+      <span>${escapeHtml(detail)}</span>
     </div>
   `;
 }
@@ -1748,11 +1756,24 @@ function parseLoosePosts(raw) {
     }));
 }
 
-function renderTimezoneOptions() {
+function renderTimezoneOptions(query = "") {
   const now = Date.now();
-  els.targetTimezone.innerHTML = XnsTimezone.TIMEZONE_OPTIONS.map((option) => (
+  const current = els.targetTimezone.value || "Asia/Shanghai";
+  const needle = String(query || "").trim().toLowerCase();
+  const matches = XnsTimezone.TIMEZONE_OPTIONS.filter((option) => {
+    if (!needle) return true;
+    const label = XnsTimezone.formatZoneLabel(option.id, now);
+    return [option.id, option.city, label, ...(option.aliases || [])]
+      .some((value) => String(value).toLowerCase().includes(needle));
+  });
+  const selectedOption = XnsTimezone.TIMEZONE_OPTIONS.find((option) => option.id === current);
+  const options = selectedOption && !matches.some((option) => option.id === current)
+    ? [selectedOption, ...matches]
+    : matches;
+  els.targetTimezone.innerHTML = options.map((option) => (
     `<option value="${escapeHtml(option.id)}">${escapeHtml(XnsTimezone.formatZoneLabel(option.id, now))} — ${escapeHtml(option.id)}</option>`
   )).join("");
+  if (options.some((option) => option.id === current)) els.targetTimezone.value = current;
 }
 
 function updateTimezoneSummary() {

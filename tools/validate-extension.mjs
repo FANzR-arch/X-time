@@ -39,6 +39,7 @@ function validateManifest() {
 
   if (manifest.manifest_version !== 3) errors.push("manifest_version must be 3");
   if (!manifest.background?.service_worker) errors.push("manifest background.service_worker is missing");
+  if (!(manifest.permissions || []).includes("alarms")) errors.push("manifest permissions must include alarms for resumable reply queues");
 
   const iconPaths = [
     ...Object.values(manifest.icons || {}),
@@ -49,7 +50,14 @@ function validateManifest() {
 
   for (const script of manifest.content_scripts || []) {
     for (const file of script.js || []) assertExtensionFile(file, "content script");
+    const replyCoreIndex = (script.js || []).indexOf("reply-core.js");
+    const contentIndex = (script.js || []).indexOf("content.js");
+    if (contentIndex >= 0 && (replyCoreIndex < 0 || replyCoreIndex > contentIndex)) {
+      errors.push("reply-core.js must load before content.js");
+    }
   }
+
+  assertExists(join(extensionDir, "sample_reply_queue.md"), "sample_reply_queue.md");
 }
 
 function validateJavaScriptSyntax() {
@@ -77,6 +85,12 @@ function validatePopupResources() {
   if (replyScriptIndex < 0) errors.push("popup.html must load reply-core.js");
   if (popupScriptIndex >= 0 && (timezoneScriptIndex > popupScriptIndex || replyScriptIndex > popupScriptIndex)) {
     errors.push("popup shared scripts must load before popup.js");
+  }
+  if (!/<div id="targetTimezoneGroup" class="schedule-group">/.test(popupHtml)) {
+    errors.push("target timezone controls must remain visible in both original and reply workspaces");
+  }
+  if (!/<div id="deliveryModeGroup" class="schedule-group original-only">/.test(popupHtml)) {
+    errors.push("draft/schedule delivery controls must only appear in the original workspace");
   }
   for (const match of popupHtml.matchAll(/\b(?:src|href|data-source)="([^"]+)"/g)) {
     assertExtensionFile(match[1], "popup resource");

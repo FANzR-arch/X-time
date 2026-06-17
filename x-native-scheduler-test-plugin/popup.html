@@ -1316,16 +1316,17 @@
             <span class="section-meta">默认 08:00-23:00 自动分配</span>
           </div>
           <div class="schedule-grid">
-            <div id="deliveryModeGroup" class="schedule-group original-only">
+            <div id="targetTimezoneGroup" class="schedule-group">
               <div class="schedule-group-title">目标时区</div>
               <label class="wide">
+                <input id="timezoneSearch" type="search" placeholder="搜索城市、IANA 时区或 UTC">
                 <select id="targetTimezone" aria-label="目标时区"></select>
                 <span id="targetTimezoneLabel" class="input-hint"></span>
                 <span id="browserTimezoneLabel" class="input-hint"></span>
               </label>
             </div>
 
-            <div class="schedule-group">
+            <div id="deliveryModeGroup" class="schedule-group original-only">
               <div class="schedule-group-title">批量执行方式</div>
               <label class="wide">
                 <div class="segmented" role="radiogroup" aria-label="批量执行方式">
