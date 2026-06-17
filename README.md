@@ -1,6 +1,6 @@
 # X-time
 
-本仓库保存本地 Chrome/Edge 扩展 `X Native Scheduler Test Plugin`，用于把单条或多条 Markdown 帖子队列批量保存为 X 草稿，或排入 X 网页原生定时发布流程。
+本仓库保存本地 Chrome/Edge 扩展 `X Native Scheduler Test Plugin`，支持原创帖队列和纯文字回复队列，并通过 X 网页原生定时流程排期。原创与回复共用可选择的目标时区。
 
 扩展不调用 X API，不上传到第三方平台，也不保存账号密码。运行时依赖已经登录的 `x.com` 页面，并通过网页原生发帖/定时 UI 完成操作。
 
@@ -14,9 +14,12 @@ x-native-scheduler-test-plugin/
 
 - `manifest.json`：扩展权限、内容脚本和后台脚本配置。
 - `popup.html` / `popup.js`：独立窗口 UI、队列编辑、AI 队列导入、排期预览和执行入口。
-- `content.js`：注入 X 页面后执行发帖、上传媒体和定时设置。
-- `background.js`：打开独立扩展窗口、聚焦目标标签页，并在需要时使用 Chrome debugger 文本插入。
+- `timezone-core.js`：目标时区、UTC 偏移和夏令时换算。
+- `reply-core.js`：回复队列解析、目标链接校验和恢复状态。
+- `content.js`：注入 X 页面后执行原创发帖或单条原生回复排期。
+- `background.js`：打开扩展窗口，并持久化编排跨多个目标页面的回复队列。
 - `sample_queue.md`：推荐 Markdown 队列模板。
+- `sample_reply_queue.md`：批量回复模板。
 - `vendor/`：本地打包的 emoji picker 依赖，避免远程 CDN。
 
 ## 加载扩展
@@ -33,12 +36,13 @@ x-native-scheduler-test-plugin/
 
 1. 打开 `https://x.com/home` 并确认已经登录。
 2. 点击浏览器工具栏里的扩展图标，打开独立排程窗口。
-3. 选择“排期发布”或“保存草稿”。选择“保存草稿”时不需要填写排期时间。
-4. 手动输入一条帖子，或导入 `.md` / `.txt` 队列文件。
-5. 如队列里使用 `media:`，先在“媒体素材”里选择同名本地文件。
-6. 点击“预览队列”或“预览草稿”检查内容和媒体匹配。
-7. 点击“开始”或“存草稿”，执行日志会记录目标标签页、脚本注入、媒体大小、发送进度和原始错误。
-8. 完成后到 X 的 `Unsent posts / Scheduled` 或草稿列表里复核。
+3. 选择“原创排期”或“回复排期”。
+4. 在“目标时区”搜索并选择城市；所有时间窗口和 `scheduled_at` 都按该时区解释。
+5. 原创模式可手动输入帖子或导入队列；回复模式批量导入多组目标链接和回复正文。
+6. 如原创队列使用 `media:`，先在“媒体素材”里选择同名本地文件。
+7. 预览中核对目标时区时间和本机换算时间。
+8. 点击“开始”。回复任务会逐条打开目标帖子并尝试使用回复框里的原生排期。
+9. 完成后到 X 的 `Unsent posts / Scheduled` 或草稿列表里复核。
 
 ## 队列格式
 
@@ -64,7 +68,21 @@ id: post-002
 
 更完整的写作规范见 `X_POST_QUEUE_FORMAT_SKILL.md`。
 
-如果队列文件声明了 `timezone:`，它必须和当前浏览器时区一致；否则插件会拒绝导入，避免跨时区定时静默错位。
+如果队列文件声明了 `timezone:`，它必须和插件当前选择的目标时区一致；否则插件会拒绝导入。UTC 偏移按排期日期动态计算，旧金山等城市的夏令时会自动处理。
+
+回复队列使用独立格式：
+
+```md
+timezone: America/Los_Angeles
+
+--- reply ---
+id: reply-001
+url: https://x.com/example/status/1234567890123456789
+
+第一条纯文字回复。
+```
+
+回复模式只支持纯文字。如果回复编辑器没有明确的原生 `Schedule / 定时` 按钮，插件会停止且不会立即发送。失败后使用“从失败项继续”，已经排期成功的任务不会重复执行。
 
 ## 打包
 
@@ -81,6 +99,7 @@ zip 属于可重新生成的本地交付物，默认不提交到 Git。
 提交前至少做一次轻量检查：
 
 ```powershell
+node --test tests/reply-core.test.cjs tests/timezone-core.test.cjs
 node tools/validate-extension.mjs
 node --check x-native-scheduler-test-plugin/background.js
 node --check x-native-scheduler-test-plugin/content.js
@@ -92,6 +111,8 @@ node --check x-native-scheduler-test-plugin/popup.js
 ## 限制
 
 - 当前测试版支持普通文本、图片和小视频。
+- 回复排期第一版仅支持纯文字。
+- 回复排期依赖 X 当前页面是否向回复编辑器提供原生排期入口；缺少入口时安全停止。
 - 暂不支持 GIF、投票、线程和长文。
 - 单个媒体和单次队列总媒体测试限制均为 25MB。
 - 扩展不会绕过 X 的登录、安全校验、验证码、风控或平台规则。

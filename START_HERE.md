@@ -55,10 +55,32 @@ D:\00_Formula\03_Coding\X-time\simulated_x_post_queue_with_video.md
 
 扩展测试版限制单个媒体和单次队列总媒体均不超过 25MB。大视频建议用 Playwright CLI 版本。
 
+## 回复排期测试流程
+
+1. 刷新扩展后，同时刷新已经打开的 `x.com` 标签页。
+2. 打开插件，切换到“回复排期”。
+3. 搜索并选择目标时区；预览会显示目标时区和北京时间换算。
+4. 导入：
+
+```text
+D:\00_Formula\03_Coding\X-time\x-native-scheduler-test-plugin\sample_reply_queue.md
+```
+
+5. 把示例 URL 替换为你自己可访问的测试帖子链接。
+6. 点击“开始”。插件会逐条打开目标帖子、填入回复并检测回复框的 X 原生排期入口。
+7. 如果日志提示“回复编辑器没有原生排期按钮”，任务会停止且不会立即发送。
+8. 修复页面或登录问题后，点击“从失败项继续”；已成功项目不会重复。
+
 ## 给 AI 的写作规范
 
 复制这个文件给 AI，让它按插件要求生成队列：
 
 ```text
 D:\00_Formula\03_Coding\X-time\X_POST_QUEUE_FORMAT_SKILL.md
+```
+
+生成回复队列使用：
+
+```text
+D:\00_Formula\03_Coding\X-time\X_REPLY_QUEUE_FORMAT_SKILL.md
 ```

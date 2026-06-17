@@ -36,7 +36,7 @@ id: post-002
   - `scheduled_at`
   - `media`
 - `scheduled_at` format must be `YYYY-MM-DD HH:mm`, using the timezone declared in the queue header.
-- The `timezone` header must match the browser timezone used by the plugin; otherwise omit `scheduled_at` and let the plugin auto-fill times.
+- The `timezone` header must match the target timezone selected in the plugin. It does not need to match the browser timezone.
 - If the user asks for automatic scheduling, omit `scheduled_at` on those posts.
 - `media` is optional. Use exact local filenames only, not paths.
 - Multiple images are comma-separated: `media: image-a.png, image-b.jpg`.
@@ -57,7 +57,7 @@ If the user provides:
 - interval
 - timezone
 
-Then generate timestamps inside that window when possible. If the requested number of posts does not fit, continue generating the Markdown; the plugin will automatically continue overflow posts in the next valid daily publishing window.
+Then generate timestamps inside that target-timezone window when possible. If the requested number of posts does not fit, continue generating the Markdown; the plugin will automatically continue overflow posts in the next valid daily publishing window.
 
 If the user says "自动排程", omit `scheduled_at` and let the plugin assign times.
 
