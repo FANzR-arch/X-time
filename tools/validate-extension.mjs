@@ -53,7 +53,7 @@ function validateManifest() {
 }
 
 function validateJavaScriptSyntax() {
-  for (const file of ["background.js", "content.js", "popup.js"]) {
+  for (const file of ["background.js", "content.js", "popup.js", "timezone-core.js", "reply-core.js"]) {
     const absolute = join(extensionDir, file);
     assertExists(absolute, file);
     const result = spawnSync(process.execPath, ["--check", absolute], { encoding: "utf8" });
@@ -70,6 +70,14 @@ function validatePopupResources() {
   assertExists(popupJsPath, "popup.js");
 
   const popupHtml = readFileSync(popupPath, "utf8");
+  const timezoneScriptIndex = popupHtml.indexOf('<script src="timezone-core.js"></script>');
+  const replyScriptIndex = popupHtml.indexOf('<script src="reply-core.js"></script>');
+  const popupScriptIndex = popupHtml.indexOf('<script type="module" src="popup.js"></script>');
+  if (timezoneScriptIndex < 0) errors.push("popup.html must load timezone-core.js");
+  if (replyScriptIndex < 0) errors.push("popup.html must load reply-core.js");
+  if (popupScriptIndex >= 0 && (timezoneScriptIndex > popupScriptIndex || replyScriptIndex > popupScriptIndex)) {
+    errors.push("popup shared scripts must load before popup.js");
+  }
   for (const match of popupHtml.matchAll(/\b(?:src|href|data-source)="([^"]+)"/g)) {
     assertExtensionFile(match[1], "popup resource");
   }
@@ -83,6 +91,11 @@ function validatePopupResources() {
   }
   for (const match of popupJs.matchAll(/\bsrc="([^"]+)"/g)) {
     assertExtensionFile(match[1], "popup js html resource");
+  }
+
+  const backgroundJs = readFileSync(join(extensionDir, "background.js"), "utf8");
+  if (!backgroundJs.includes('importScripts("reply-core.js")')) {
+    errors.push("background.js must import reply-core.js");
   }
 }
 

@@ -1,3 +1,5 @@
+importScripts("reply-core.js");
+
 let schedulerWindowId = null;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

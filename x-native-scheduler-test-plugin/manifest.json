@@ -5,6 +5,7 @@
   "description": "Local MD, paste, image, and small-video queue tool for X's native scheduled-post composer.",
   "permissions": [
     "activeTab",
+    "alarms",
     "clipboardWrite",
     "debugger",
     "scripting",
