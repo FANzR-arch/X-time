@@ -1,6 +1,9 @@
 import "./vendor/emoji-picker-element/index.js";
 import zhCnI18n from "./vendor/emoji-picker-element/i18n/zh_CN.js";
 
+const XnsTimezone = globalThis.XnsTimezone;
+if (!XnsTimezone) throw new Error("timezone-core.js 未加载。");
+
 const STORAGE_KEYS = {
   source: "xns.popup.source",
   options: "xns.popup.options",
@@ -34,7 +37,7 @@ const AI_QUEUE_PROMPT = `请把我接下来给你的主题/素材改写成适合
 2. 每条帖子的元数据写在正文前面，可用字段只有 id、scheduled_at、media。
 3. scheduled_at 使用 YYYY-MM-DD HH:mm，例如 2026-06-16 09:30；不确定时间就省略，让插件自动排期。
 4. media 只写文件名，多个文件用英文逗号分隔；没有媒体就省略。
-5. timezone 必须和用户浏览器时区一致；不确定时不要写 scheduled_at。
+5. timezone 必须和插件中选择的目标时区一致；scheduled_at 按目标时区解释。
 6. 单个媒体文件和单次队列总媒体大小都不要超过 25MB。
 7. 元数据和正文之间必须空一行。
 8. 正文中不要出现独立一行 --- post ---。
@@ -62,6 +65,9 @@ const els = {
   source: document.getElementById("source"),
   deliveryModeInputs: [...document.querySelectorAll('input[name="deliveryMode"]')],
   deliveryModeHint: document.getElementById("deliveryModeHint"),
+  targetTimezone: document.getElementById("targetTimezone"),
+  targetTimezoneLabel: document.getElementById("targetTimezoneLabel"),
+  browserTimezoneLabel: document.getElementById("browserTimezoneLabel"),
   scheduleOnlySections: [...document.querySelectorAll(".schedule-only")],
   manualScheduledAt: document.getElementById("manualScheduledAt"),
   scheduleMode: document.getElementById("scheduleMode"),
@@ -100,6 +106,7 @@ let previewMediaUrls = [];
 init();
 
 async function init() {
+  renderTimezoneOptions();
   setDefaultTimes();
   await restoreState();
   setupEmojiPicker();
@@ -108,6 +115,7 @@ async function init() {
   renderMediaList();
   renderQueue({ validateMedia: false, silent: true });
   updateComposerState();
+  updateTimezoneSummary();
   await renderRunState();
   pollRunState();
 }
@@ -148,6 +156,7 @@ function bindEvents() {
 
   const scheduleControls = [
     ...els.deliveryModeInputs,
+    els.targetTimezone,
     els.scheduleMode,
     els.dailyStartTime,
     els.dailyEndTime,
@@ -162,6 +171,7 @@ function bindEvents() {
   for (const input of scheduleControls) {
     input.addEventListener("change", () => {
       syncScheduleControls();
+      updateTimezoneSummary();
       renderQueue({ validateMedia: false, silent: true });
       schedulePersistState();
     });
@@ -209,6 +219,7 @@ async function restoreState() {
   if (saved[STORAGE_KEYS.source]) els.source.value = saved[STORAGE_KEYS.source];
 
   const options = saved[STORAGE_KEYS.options] || {};
+  els.targetTimezone.value = options.targetTimezone || "Asia/Shanghai";
   setDeliveryMode(options.deliveryMode || "schedule");
   if (options.manualScheduledAt) els.manualScheduledAt.value = toDateTimePlaceholderFormat(options.manualScheduledAt);
   if (options.scheduleMode) els.scheduleMode.value = options.scheduleMode;
@@ -240,6 +251,7 @@ function setDefaultTimes() {
   els.jitterEnabled.checked = false;
   els.jitterMinutes.value = "5";
   els.delaySeconds.value = "1.2";
+  els.targetTimezone.value = "Asia/Shanghai";
   syncScheduleControls();
 }
 
@@ -630,7 +642,8 @@ function schedulePosts(posts, { validateMedia = true } = {}) {
   }
 
   const config = normalizeScheduleOptions(getOptions());
-  const now = Date.now();
+  const nowEpochMs = Date.now();
+  const now = XnsTimezone.epochToWallDate(nowEpochMs, config.timezone);
   const autoPosts = [];
 
   posts.forEach((post, index) => {
@@ -657,8 +670,11 @@ function schedulePosts(posts, { validateMedia = true } = {}) {
     if (assignment?.scheduleNote) scheduleNote = assignment.scheduleNote;
     if (!date || Number.isNaN(date.getTime())) throw new Error(`第 ${index + 1} 条时间无效。`);
 
-    if (date.getTime() <= now + 60_000) {
-      date = nextWindowStart(new Date(now + 60_000), config);
+    let dateMs = XnsTimezone.wallDateToEpoch(date, config.timezone);
+    if (dateMs <= nowEpochMs + 60_000) {
+      const minimumWallTime = XnsTimezone.epochToWallDate(nowEpochMs + 60_000, config.timezone);
+      date = nextWindowStart(minimumWallTime, config);
+      dateMs = XnsTimezone.wallDateToEpoch(date, config.timezone);
       scheduleSource = "系统自动";
       jittered = false;
       scheduleNote = "已过期，顺延到窗口";
@@ -671,6 +687,8 @@ function schedulePosts(posts, { validateMedia = true } = {}) {
       id: post.id || `post-${String(index + 1).padStart(3, "0")}`,
       text,
       date,
+      dateMs,
+      targetTimezone: config.timezone,
       deliveryMode: "schedule",
       queueIndex: index,
       scheduleSource,
@@ -681,7 +699,7 @@ function schedulePosts(posts, { validateMedia = true } = {}) {
     };
   });
 
-  return items.sort((a, b) => a.date.getTime() - b.date.getTime());
+  return items.sort((a, b) => a.dateMs - b.dateMs);
 }
 
 function buildDraftItems(posts, { validateMedia = true } = {}) {
@@ -696,6 +714,8 @@ function buildDraftItems(posts, { validateMedia = true } = {}) {
       id: post.id || `post-${String(index + 1).padStart(3, "0")}`,
       text,
       date: null,
+      dateMs: null,
+      targetTimezone: getTargetTimezone(),
       deliveryMode: "draft",
       queueIndex: index,
       scheduleSource: "保存草稿",
@@ -708,6 +728,7 @@ function buildDraftItems(posts, { validateMedia = true } = {}) {
 }
 
 function normalizeScheduleOptions(options) {
+  const timezone = XnsTimezone.assertTimeZone(options.targetTimezone || "Asia/Shanghai");
   const dailyStart = parseClockTime(options.dailyStartTime || "08:00");
   const dailyEnd = parseClockTime(options.dailyEndTime || "23:00");
   if (!dailyStart || !dailyEnd) throw new Error("每日发布窗口格式无效。");
@@ -725,6 +746,7 @@ function normalizeScheduleOptions(options) {
   const jitterMinutes = Math.max(1, Number(options.jitterMinutes || 5));
 
   return {
+    timezone,
     mode,
     strategy,
     dailyStart,
@@ -835,16 +857,16 @@ function assignFixedAutomaticDates(autoPosts, config, now) {
 }
 
 function getAutomaticRange(config, now) {
-  const configuredStart = config.startAt || getDefaultAutomaticStart(config);
-  const minimumStart = new Date(now + 60_000);
+  const configuredStart = config.startAt || getDefaultAutomaticStart(config, now);
+  const minimumStart = new Date(now.getTime() + 60_000);
   const start = configuredStart.getTime() <= minimumStart.getTime() ? minimumStart : configuredStart;
   const normalizedStart = nextWindowStart(start, config);
   const end = config.endAt || windowEndForDate(normalizedStart, config);
   return { start: normalizedStart, end };
 }
 
-function getDefaultAutomaticStart(config) {
-  const start = new Date();
+function getDefaultAutomaticStart(config, now) {
+  const start = new Date(now);
   start.setDate(start.getDate() + 1);
   start.setHours(config.dailyStart.hours, config.dailyStart.minutes, 0, 0);
   return start;
@@ -1068,7 +1090,8 @@ function renderPreview(items) {
             <div class="account">X Scheduler <span>@queue · ${isDraftItem ? "待存草稿" : "已排期"}</span></div>
             <div class="tweet-head-badges">
               <span class="time-badge count-badge">${index + 1}/${items.length}</span>
-              <span class="time-badge">${isDraftItem ? "不排期" : formatDateTime(item.date)}</span>
+              <span class="time-badge">${isDraftItem ? "不排期" : `${escapeHtml(XnsTimezone.formatZoneLabel(item.targetTimezone, item.dateMs))} ${formatDateTime(item.date)}`}</span>
+              ${isDraftItem ? "" : `<span class="time-badge">本机 ${escapeHtml(XnsTimezone.formatEpochInZone(item.dateMs, getBrowserTimezone()))}</span>`}
             </div>
           </div>
           <div class="tweet-body">${escapeHtml(item.text)}</div>
@@ -1319,7 +1342,7 @@ async function prepareOutboundItems(items) {
     id: item.id,
     text: item.text,
     deliveryMode: item.deliveryMode || getDeliveryMode(),
-    dateMs: item.date ? item.date.getTime() : null,
+    dateMs: item.dateMs ?? null,
     media: await Promise.all(item.mediaFiles.map(fileToPayload))
   })));
 }
@@ -1385,9 +1408,9 @@ function validateDeclaredTimezone(raw) {
   if (!match) return "";
 
   const declared = match[1].trim();
-  const local = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
-  if (local && declared !== local) {
-    throw new Error(`队列 timezone 为 ${declared}，当前浏览器时区为 ${local}。请改成当前浏览器时区，或省略 scheduled_at 让插件自动排期。`);
+  const selected = getTargetTimezone();
+  if (declared !== selected) {
+    throw new Error(`队列 timezone 为 ${declared}，当前目标时区为 ${selected}。请切换目标时区后重试。`);
   }
   return declared;
 }
@@ -1474,8 +1497,36 @@ function parseLoosePosts(raw) {
     }));
 }
 
+function renderTimezoneOptions() {
+  const now = Date.now();
+  els.targetTimezone.innerHTML = XnsTimezone.TIMEZONE_OPTIONS.map((option) => (
+    `<option value="${escapeHtml(option.id)}">${escapeHtml(XnsTimezone.formatZoneLabel(option.id, now))} — ${escapeHtml(option.id)}</option>`
+  )).join("");
+}
+
+function updateTimezoneSummary() {
+  try {
+    const target = getTargetTimezone();
+    const browser = getBrowserTimezone();
+    els.targetTimezoneLabel.textContent = `目标：${XnsTimezone.formatZoneLabel(target)} · ${target}`;
+    els.browserTimezoneLabel.textContent = `本机：${XnsTimezone.formatZoneLabel(browser)} · ${browser}`;
+  } catch (error) {
+    els.targetTimezoneLabel.textContent = error.message;
+    els.browserTimezoneLabel.textContent = "";
+  }
+}
+
+function getTargetTimezone() {
+  return XnsTimezone.assertTimeZone(els.targetTimezone.value || "Asia/Shanghai");
+}
+
+function getBrowserTimezone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
+}
+
 function getOptions() {
   return {
+    targetTimezone: getTargetTimezone(),
     deliveryMode: getDeliveryMode(),
     manualScheduledAt: els.manualScheduledAt.value,
     scheduleMode: els.scheduleMode.value,

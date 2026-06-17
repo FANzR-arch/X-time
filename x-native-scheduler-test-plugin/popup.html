@@ -1286,6 +1286,15 @@
           </div>
           <div class="schedule-grid">
             <div class="schedule-group">
+              <div class="schedule-group-title">目标时区</div>
+              <label class="wide">
+                <select id="targetTimezone" aria-label="目标时区"></select>
+                <span id="targetTimezoneLabel" class="input-hint"></span>
+                <span id="browserTimezoneLabel" class="input-hint"></span>
+              </label>
+            </div>
+
+            <div class="schedule-group">
               <div class="schedule-group-title">批量执行方式</div>
               <label class="wide">
                 <div class="segmented" role="radiogroup" aria-label="批量执行方式">
@@ -1320,21 +1329,21 @@
               </label>
               <div class="schedule-row">
                 <label>
-                  每日开始
+                  每日开始（目标时区）
                   <input id="dailyStartTime" type="time" value="08:00">
                 </label>
                 <label>
-                  每日结束
+                  每日结束（目标时区）
                   <input id="dailyEndTime" type="time" value="23:00">
                 </label>
               </div>
               <div class="schedule-row">
                 <label>
-                  排期开始（可选）
+                  排期开始（目标时区，可选）
                   <input id="startAt" type="datetime-local" placeholder="yyyy/mm/dd hh:mm">
                 </label>
                 <label>
-                  排期结束（可选）
+                  排期结束（目标时区，可选）
                   <input id="endAt" type="datetime-local" placeholder="yyyy/mm/dd hh:mm">
                 </label>
               </div>
