@@ -5,6 +5,7 @@ dist/
 build/
 coverage/
 .superpowers/
+.worktrees/
 
 .env
 .env.*
