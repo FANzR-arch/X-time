@@ -37,6 +37,12 @@ test("rejects non-status URLs", () => {
   assert.throws(() => reply.normalizeStatusUrl("https://example.com/a/status/1"), /x\.com/);
 });
 
+test("extracts and validates the current status id", () => {
+  assert.equal(reply.statusIdFromUrl("https://x.com/a/status/123"), "123");
+  assert.equal(reply.statusIdFromUrl("https://twitter.com/a/status/456/photo/1"), "456");
+  assert.equal(reply.statusIdFromUrl("https://x.com/home"), "");
+});
+
 test("keeps duplicate targets and emits a warning", () => {
   const items = reply.parseReplyQueue(`--- reply ---
 url: https://x.com/a/status/123

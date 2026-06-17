@@ -1635,7 +1635,7 @@ async function ensureContentScript(tabId) {
 
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: ["content.js"]
+    files: ["reply-core.js", "content.js"]
   });
 
   const response = await chrome.tabs.sendMessage(tabId, { type: "xns-get-status" });

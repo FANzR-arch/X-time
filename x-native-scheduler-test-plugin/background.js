@@ -227,7 +227,7 @@ async function ensureContentScriptInTab(tabId) {
   } catch (_error) {
     // Inject below when the declared content script has not responded yet.
   }
-  await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["reply-core.js", "content.js"] });
 }
 
 function tabMatchesReply(tab, item) {

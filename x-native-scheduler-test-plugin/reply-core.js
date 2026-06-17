@@ -90,6 +90,17 @@
     };
   }
 
+  function statusIdFromUrl(rawUrl) {
+    try {
+      const parsed = new URL(String(rawUrl || ""));
+      const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+      if (!new Set(["x.com", "twitter.com"]).has(host)) return "";
+      return (parsed.pathname.match(/\/status\/(\d+)(?:\/|$)/i) || [])[1] || "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
   function duplicateTargetWarnings(items) {
     const counts = new Map();
     for (const item of items) counts.set(item.targetUrl, (counts.get(item.targetUrl) || 0) + 1);
@@ -210,6 +221,7 @@
   return {
     parseReplyQueue,
     normalizeStatusUrl,
+    statusIdFromUrl,
     createReplyRunState,
     markReplyProcessing,
     markReplyScheduled,

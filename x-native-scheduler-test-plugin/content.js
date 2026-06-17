@@ -3,12 +3,14 @@
   window.__xnsContentScriptLoaded = true;
 
   const RUN_STATE_KEY = "xns.runState";
+  const XnsReply = globalThis.XnsReply;
   const state = {
     running: false,
     stopRequested: false,
     log: [],
     progress: { current: 0, total: 0 }
   };
+  let replyStopRequested = false;
 
   const labelGroups = {
     month: ["month", "月份", "月"],
@@ -51,6 +53,31 @@
     if (message.type === "xns-stop-queue") {
       state.stopRequested = true;
       publishState("stopping", "收到停止请求，当前步骤结束后停止。");
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    if (message.type === "xns-process-reply") {
+      if (state.running) {
+        sendResponse({ ok: false, code: "QUEUE_BUSY", error: "原创帖子队列正在运行。" });
+        return false;
+      }
+      replyStopRequested = false;
+      processScheduledReply(message.item || {})
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({
+          ok: false,
+          code: error.code || classifyReplyError(error),
+          error: error.message || String(error)
+        }))
+        .finally(() => {
+          replyStopRequested = false;
+        });
+      return true;
+    }
+
+    if (message.type === "xns-stop-reply-item") {
+      replyStopRequested = true;
       sendResponse({ ok: true });
       return false;
     }
@@ -206,6 +233,139 @@
     await setScheduleDialog(item.date);
     await confirmScheduleDialog();
     await publishScheduledPost(editable);
+  }
+
+  async function processScheduledReply(rawItem) {
+    if (!globalThis.XnsReply) throw replyError("REPLY_CORE_MISSING", "回复安全模块未加载，请刷新 X 页面后重试。");
+    const item = normalizeReplyItem(rawItem);
+    const currentStatusId = XnsReply.statusIdFromUrl(location.href);
+    if (currentStatusId !== item.targetStatusId) {
+      throw replyError("TARGET_MISMATCH", `当前页面不是目标帖子 ${item.targetStatusId}，已停止。`);
+    }
+
+    const article = await waitFor(
+      () => findTargetArticle(item.targetStatusId),
+      15_000,
+      "找不到目标帖子，可能已删除、受限或账号未登录。"
+    );
+    const replyButton = findVisible([
+      '[data-testid="reply"]',
+      '[aria-label*="Reply"]',
+      '[aria-label*="reply"]',
+      '[aria-label*="回复"]'
+    ], article) || findButtonByText(["Reply", "回复"], article);
+    if (!replyButton) throw replyError("REPLY_BUTTON_MISSING", "找不到目标帖对应的回复入口，已停止。");
+
+    const previousEditables = new Set(findAllVisibleEditables());
+    realClick(replyButton);
+    const editable = await waitFor(
+      () => findNewReplyEditable(previousEditables),
+      12_000,
+      "点击回复后未找到目标帖的回复编辑器。"
+    );
+    assertReplyComposer(editable);
+    await fillComposer(editable, item.text);
+    if (replyStopRequested) throw replyError("REPLY_STOPPED", "用户已停止回复队列。");
+
+    try {
+      await openScheduleDialog(editable);
+    } catch (_error) {
+      throw replyError(
+        "REPLY_SCHEDULE_UNAVAILABLE",
+        "回复编辑器没有原生排期按钮，已停止且未立即发送。"
+      );
+    }
+    await setScheduleDialog(new Date(item.scheduledEpochMs));
+    await confirmScheduleDialog();
+    await publishScheduledReply(editable);
+    return {
+      ok: true,
+      status: "scheduled",
+      targetStatusId: item.targetStatusId,
+      scheduledEpochMs: item.scheduledEpochMs
+    };
+  }
+
+  function normalizeReplyItem(rawItem) {
+    const targetStatusId = String(rawItem.targetStatusId || "").trim();
+    const text = normalizedText(rawItem.text);
+    const scheduledEpochMs = Number(rawItem.scheduledEpochMs);
+    if (!/^\d+$/.test(targetStatusId)) throw replyError("TARGET_INVALID", "目标帖子 ID 无效。");
+    if (!text) throw replyError("REPLY_EMPTY", "回复内容为空。");
+    if (!Number.isFinite(scheduledEpochMs) || scheduledEpochMs <= Date.now() + 60_000) {
+      throw replyError("SCHEDULE_INVALID", "回复排期时间必须晚于当前时间至少 1 分钟。");
+    }
+    return { targetStatusId, text, scheduledEpochMs };
+  }
+
+  function findTargetArticle(targetStatusId) {
+    const links = [...document.querySelectorAll(`a[href*="/status/${targetStatusId}"]`)].filter(isVisible);
+    const exact = links.find((link) => XnsReply.statusIdFromUrl(link.href) === targetStatusId);
+    return exact?.closest("article") || null;
+  }
+
+  function findAllVisibleEditables() {
+    const selectors = [
+      '[data-testid="tweetTextarea_0"]',
+      '[role="textbox"][contenteditable="true"]',
+      'div[contenteditable="true"][aria-label]',
+      'textarea[aria-label]'
+    ];
+    return [...document.querySelectorAll(selectors.join(","))].filter(isVisible);
+  }
+
+  function findNewReplyEditable(previousEditables) {
+    const dialog = getActiveDialog();
+    const dialogEditable = dialog ? findEditable(dialog) : null;
+    if (dialogEditable && !previousEditables.has(dialogEditable)) return dialogEditable;
+    return findAllVisibleEditables().find((editable) => !previousEditables.has(editable)) || null;
+  }
+
+  function assertReplyComposer(editable) {
+    const scope = getComposerScope(editable);
+    const context = normalizedText(scope.innerText || "").toLowerCase();
+    const replyAction = findVisible(['[data-testid="tweetButton"]', '[data-testid="tweetButtonInline"]'], scope);
+    const actionLabel = normalizedText(replyAction?.innerText || replyAction?.getAttribute("aria-label") || "").toLowerCase();
+    if (!/reply|回复|回覆/.test(`${context} ${actionLabel}`)) {
+      throw replyError("REPLY_CONTEXT_UNCONFIRMED", "无法确认当前编辑器属于目标帖回复，已停止。");
+    }
+  }
+
+  async function publishScheduledReply(editable) {
+    if (replyStopRequested) throw replyError("REPLY_STOPPED", "用户已停止回复队列。");
+    const scope = getComposerScope(editable);
+    const candidate = await waitFor(() => {
+      const buttons = [...scope.querySelectorAll('button,[role="button"]')].filter(isVisible);
+      return buttons.find((button) => {
+        const label = button.innerText || button.getAttribute("aria-label") || "";
+        return !isDisabled(button) && XnsReply.isSafeScheduleAction(label);
+      }) || null;
+    }, 10_000, "回复编辑器没有可确认的原生排期按钮，已停止且未立即发送。");
+
+    const label = candidate.innerText || candidate.getAttribute("aria-label") || "";
+    if (!XnsReply.isSafeScheduleAction(label)) {
+      throw replyError("REPLY_SCHEDULE_UNAVAILABLE", "最终按钮不是明确的原生排期操作，已停止且未立即发送。");
+    }
+    realClick(candidate);
+    await waitFor(
+      () => !document.contains(editable) || !isVisible(editable),
+      12_000,
+      "点击排期后无法确认回复编辑器已关闭，请在 X 定时列表中人工复核。"
+    );
+  }
+
+  function replyError(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+  }
+
+  function classifyReplyError(error) {
+    const message = error?.message || String(error || "");
+    if (/排期按钮|定时按钮|原生排期/.test(message)) return "REPLY_SCHEDULE_UNAVAILABLE";
+    if (/目标帖子|当前页面/.test(message)) return "TARGET_UNAVAILABLE";
+    if (/用户已停止/.test(message)) return "REPLY_STOPPED";
+    return "REPLY_SCHEDULE_FAILED";
   }
 
   async function openComposer({ forceModal = false } = {}) {
@@ -706,7 +866,7 @@
   async function waitFor(fn, timeoutMs, message) {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
-      if (state.stopRequested) throw new Error("用户已停止队列。");
+      if (state.stopRequested || replyStopRequested) throw new Error("用户已停止队列。");
       const result = fn();
       if (result) return result;
       await sleep(150);
