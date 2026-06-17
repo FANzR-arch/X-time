@@ -70,9 +70,10 @@
   });
 
   async function startQueue(rawItems, rawOptions) {
+    const deliveryMode = normalizeDeliveryMode(rawOptions.deliveryMode);
     let items;
     try {
-      items = normalizeIncomingItems(rawItems);
+      items = normalizeIncomingItems(rawItems, deliveryMode);
     } catch (error) {
       await publishState("error", error.message);
       return;
@@ -84,16 +85,17 @@
     state.log = [];
     state.progress = { current: 0, total: items.length };
 
-    await publishState("running", `开始排程：共 ${items.length} 条。`);
+    await publishState("running", `${deliveryMode === "draft" ? "开始保存草稿" : "开始排程"}：共 ${items.length} 条。`);
 
     try {
       for (let index = 0; index < items.length; index += 1) {
         if (state.stopRequested) break;
         const item = items[index];
         state.progress = { current: index + 1, total: items.length };
-        await addLog(`START ${index + 1}/${items.length} ${formatDateTime(item.date)} ${item.id || ""}`.trim());
-        await publishState("running", `正在处理 ${index + 1}/${items.length}：${formatDateTime(item.date)}`);
-        await scheduleOne(item);
+        const itemTarget = item.deliveryMode === "draft" ? "保存草稿" : formatDateTime(item.date);
+        await addLog(`START ${index + 1}/${items.length} ${itemTarget} ${item.id || ""}`.trim());
+        await publishState("running", `正在处理 ${index + 1}/${items.length}：${itemTarget}`);
+        await processOne(item);
         await addLog(`DONE ${index + 1}/${items.length}`);
         await sleep(delayMs);
       }
@@ -103,7 +105,11 @@
       state.stopRequested = false;
       await publishState(
         wasStopped ? "stopped" : "done",
-        wasStopped ? "已停止。请检查 X 定时列表确认已完成部分。" : "队列完成。请打开 X 未发送/定时列表复核。"
+        wasStopped
+          ? "已停止。请检查 X 未发送列表确认已完成部分。"
+          : deliveryMode === "draft"
+            ? "草稿队列完成。请打开 X 未发送/草稿列表复核。"
+            : "排期队列完成。请打开 X 未发送/定时列表复核。"
       );
     } catch (error) {
       await addLog(`ERROR ${error.message}`);
@@ -116,7 +122,11 @@
     }
   }
 
-  function normalizeIncomingItems(rawItems) {
+  function normalizeDeliveryMode(value) {
+    return value === "draft" ? "draft" : "schedule";
+  }
+
+  function normalizeIncomingItems(rawItems, deliveryMode) {
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
       throw new Error("没有收到有效队列。");
     }
@@ -124,16 +134,21 @@
     const now = Date.now();
     return rawItems.map((raw, index) => {
       const text = normalizedText(raw.text);
+      const media = normalizeIncomingMedia(raw.media || [], index);
+      const itemMode = normalizeDeliveryMode(raw.deliveryMode || deliveryMode);
       const dateMs = Number(raw.dateMs);
-      const date = new Date(dateMs);
-      if (!text) throw new Error(`第 ${index + 1} 条内容为空。`);
-      if (!Number.isFinite(dateMs) || Number.isNaN(date.getTime())) throw new Error(`第 ${index + 1} 条时间无效。`);
-      if (date.getTime() <= now + 60_000) throw new Error(`第 ${index + 1} 条时间必须晚于当前时间至少 1 分钟。`);
+      const date = itemMode === "schedule" ? new Date(dateMs) : null;
+      if (!text && !media.length) throw new Error(`第 ${index + 1} 条内容为空。`);
+      if (itemMode === "schedule") {
+        if (!Number.isFinite(dateMs) || Number.isNaN(date.getTime())) throw new Error(`第 ${index + 1} 条时间无效。`);
+        if (date.getTime() <= now + 60_000) throw new Error(`第 ${index + 1} 条时间必须晚于当前时间至少 1 分钟。`);
+      }
       return {
         id: raw.id || `post-${String(index + 1).padStart(3, "0")}`,
         text,
+        deliveryMode: itemMode,
         date,
-        media: normalizeIncomingMedia(raw.media || [], index)
+        media
       };
     });
   }
@@ -173,19 +188,32 @@
     await publishState("running", message);
   }
 
-  async function scheduleOne(item) {
-    await openComposer();
-    const editable = await waitFor(findEditable, 15_000, "找不到 X 发帖输入框");
-    await fillComposer(editable, item.text);
+  async function processOne(item) {
+    const forceModal = item.deliveryMode === "draft";
+    await openComposer({ forceModal });
+    const editable = await waitFor(forceModal ? findDialogEditable : findEditable, 15_000, "找不到 X 发帖输入框");
+    if (item.text) {
+      await fillComposer(editable, item.text);
+    } else {
+      ensureComposerEmpty(editable);
+    }
     await attachMedia(editable, item.media);
+    if (item.deliveryMode === "draft") {
+      await saveDraftPost(editable);
+      return;
+    }
     await openScheduleDialog(editable);
     await setScheduleDialog(item.date);
     await confirmScheduleDialog();
     await publishScheduledPost(editable);
   }
 
-  async function openComposer() {
-    if (findEditable()) return;
+  async function openComposer({ forceModal = false } = {}) {
+    if (forceModal) {
+      if (findDialogEditable()) return;
+    } else if (findEditable()) {
+      return;
+    }
 
     const composeButton = findVisible([
       '[data-testid="SideNav_NewTweet_Button"]',
@@ -203,8 +231,7 @@
   async function fillComposer(editable, text) {
     await sleep(350);
     const expected = comparableComposerText(text);
-    const existing = comparableComposerText(getComposerText(editable));
-    if (existing) throw new Error("当前发帖框已有内容，请先关闭或清空后再运行。");
+    ensureComposerEmpty(editable);
 
     editable.focus();
     if (editable.isContentEditable) {
@@ -217,6 +244,11 @@
     if (actual !== expected) {
       throw new Error(`X composer text incomplete: wrote ${actual.length}/${expected.length} chars. Stopped before scheduling.`);
     }
+  }
+
+  function ensureComposerEmpty(editable) {
+    const existing = comparableComposerText(getComposerText(editable));
+    if (existing) throw new Error("当前发帖框已有内容，请先关闭或清空后再运行。");
   }
 
   async function insertContentEditableText(editable, text, expected) {
@@ -514,14 +546,47 @@
     await sleep(2_200);
   }
 
-  function findEditable() {
+  async function saveDraftPost(editable) {
+    const scope = getComposerScope(editable);
+    const closeButton = findVisible([
+      '[data-testid="app-bar-close"]',
+      '[aria-label="Close"]',
+      '[aria-label*="Close"]',
+      '[aria-label*="关闭"]'
+    ], scope) || findButtonByText(["Close", "关闭"], scope);
+
+    if (!closeButton) throw new Error("找不到关闭发帖弹窗的按钮，无法保存草稿。");
+    realClick(closeButton);
+    await sleep(500);
+
+    const saveButton = await waitFor(() => {
+      const dialog = getActiveDialog();
+      const searchScope = dialog || document;
+      const candidate = findButtonByText(["Save draft", "保存草稿", "Save", "保存"], searchScope)
+        || findVisible([
+          '[data-testid="confirmationSheetConfirm"]',
+          '[data-testid="confirmationSheetConfirmButton"]'
+        ], searchScope);
+      return candidate && !isDisabled(candidate) ? candidate : null;
+    }, 10_000, "找不到保存草稿确认按钮");
+
+    realClick(saveButton);
+    await sleep(1_200);
+  }
+
+  function findEditable(scope = document) {
     const candidates = [
       '[data-testid="tweetTextarea_0"]',
       '[role="textbox"][contenteditable="true"]',
       'div[contenteditable="true"][aria-label]',
       'textarea[aria-label]'
     ];
-    return findVisible(candidates);
+    return findVisible(candidates, scope);
+  }
+
+  function findDialogEditable() {
+    const dialog = getActiveDialog();
+    return dialog ? findEditable(dialog) : null;
   }
 
   function getComposerScope(editable) {

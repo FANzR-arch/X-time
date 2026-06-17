@@ -15,7 +15,7 @@ timezone: Asia/Shanghai
 
 --- post ---
 id: post-001
-scheduled_at: 2026-06-08 09:30
+scheduled_at: 2026-06-16 09:30
 media: optional-image.png
 
 帖子正文。
@@ -35,12 +35,14 @@ id: post-002
   - `id`
   - `scheduled_at`
   - `media`
-- `scheduled_at` format must be `YYYY-MM-DD HH:mm`, using `Asia/Shanghai`.
+- `scheduled_at` format must be `YYYY-MM-DD HH:mm`, using the timezone declared in the queue header.
+- The `timezone` header must match the browser timezone used by the plugin; otherwise omit `scheduled_at` and let the plugin auto-fill times.
 - If the user asks for automatic scheduling, omit `scheduled_at` on those posts.
 - `media` is optional. Use exact local filenames only, not paths.
 - Multiple images are comma-separated: `media: image-a.png, image-b.jpg`.
 - A post may have up to 4 images.
 - A post with video may only have 1 video and no other media.
+- Keep each media file under 25MB and keep the total media in one plugin run under 25MB.
 - Do not include hashtags unless the user explicitly asks.
 - Do not include URLs unless the user explicitly provides or asks for them.
 - Keep each post under the requested character limit. Default limit is 280 characters.
@@ -82,14 +84,14 @@ timezone: Asia/Shanghai
 
 --- post ---
 id: post-001
-scheduled_at: 2026-06-08 09:30
+scheduled_at: 2026-06-16 09:30
 media: launch-cover.png
 
 第一条正文。
 
 --- post ---
 id: post-002
-scheduled_at: 2026-06-08 11:00
+scheduled_at: 2026-06-16 11:00
 
 第二条正文。
 ```

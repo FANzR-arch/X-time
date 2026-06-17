@@ -208,9 +208,9 @@
         height: 38px;
         flex: 0 0 auto;
         place-items: center;
-        border-radius: 50%;
+        border-radius: 12px;
         overflow: hidden;
-        background: transparent;
+        background: #181818;
       }
 
       .x-logo {
@@ -218,13 +218,12 @@
         width: 100%;
         height: 100%;
         pointer-events: none;
-        transform: scale(1.72);
-        transform-origin: center;
+        object-fit: contain;
       }
 
       .brand-mark .x-logo {
-        transform: scale(0.6);
-        filter: invert(1);
+        transform: none;
+        filter: none;
       }
 
       .top h1 {
@@ -350,9 +349,9 @@
         width: var(--compose-avatar);
         height: var(--compose-avatar);
         place-items: center;
-        border-radius: 50%;
+        border-radius: 12px;
         overflow: hidden;
-        background: var(--primary);
+        background: transparent;
       }
 
       .source-input {
@@ -717,6 +716,10 @@
         font-weight: 950;
       }
 
+      .schedule-only.is-disabled {
+        opacity: .48;
+      }
+
       .advanced-rules {
         display: grid;
         gap: 10px;
@@ -894,9 +897,9 @@
         width: 36px;
         height: 36px;
         place-items: center;
-        border-radius: 50%;
+        border-radius: 10px;
         overflow: hidden;
-        background: var(--primary);
+        background: transparent;
       }
 
       .tweet-head {
@@ -1218,7 +1221,7 @@
   <body>
     <header class="top">
       <div class="brand">
-        <div class="brand-mark"><img class="x-logo" src="assets/LOGO04.svg" alt="" aria-hidden="true"></div>
+        <div class="brand-mark"><img class="x-logo" src="assets/plugin-logo-128.png" alt="" aria-hidden="true"></div>
         <div>
           <h1>X Native Scheduler</h1>
         </div>
@@ -1233,7 +1236,7 @@
       <main class="stack">
         <section class="card compose-card">
           <div class="compose-main">
-            <div class="compose-avatar"><img class="x-logo" src="assets/twitter-x-seeklogo.svg" alt="" aria-hidden="true"></div>
+            <div class="compose-avatar"><img class="x-logo" src="assets/plugin-logo-128.png" alt="" aria-hidden="true"></div>
             <textarea id="source" class="source-input" spellcheck="false" placeholder="有什么新鲜事？"></textarea>
             <button id="clearDraftTop" class="draft-label clear-draft-inline" type="button" title="清空当前草稿">清空</button>
           </div>
@@ -1283,13 +1286,30 @@
           </div>
           <div class="schedule-grid">
             <div class="schedule-group">
+              <div class="schedule-group-title">批量执行方式</div>
+              <label class="wide">
+                <div class="segmented" role="radiogroup" aria-label="批量执行方式">
+                  <label class="segment-option">
+                    <input type="radio" name="deliveryMode" value="schedule" checked>
+                    <span>排期发布</span>
+                  </label>
+                  <label class="segment-option">
+                    <input type="radio" name="deliveryMode" value="draft">
+                    <span>保存草稿</span>
+                  </label>
+                </div>
+                <span id="deliveryModeHint" class="input-hint">排期发布会逐条进入 X 原生定时流程。</span>
+              </label>
+            </div>
+
+            <div class="schedule-group schedule-only">
               <label class="wide">
                 <span>草稿定时发布（可选）<span class="help-icon" data-tip="留空则保存后由系统自动排期。">?</span></span>
                 <input id="manualScheduledAt" class="date-time-input" type="text" inputmode="numeric" autocomplete="off" placeholder="yyyy/mm/dd hh:mm">
               </label>
             </div>
 
-            <div class="schedule-group">
+            <div class="schedule-group schedule-only">
               <div class="schedule-group-title">自动排期规则</div>
               <label class="wide">
                 <select id="scheduleMode">
@@ -1337,7 +1357,7 @@
               </label>
             </div>
 
-            <div class="schedule-group">
+            <div class="schedule-group schedule-only">
               <details class="advanced-rules">
                 <summary>高级规则</summary>
                 <div class="schedule-row">

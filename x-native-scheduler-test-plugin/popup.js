@@ -9,14 +9,15 @@ const STORAGE_KEYS = {
 };
 
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
-const X_LOGO_HTML = '<img class="x-logo" src="assets/twitter-x-seeklogo.svg" alt="" aria-hidden="true">';
+const MAX_RUN_MEDIA_BYTES = 25 * 1024 * 1024;
+const PLUGIN_LOGO_HTML = '<img class="x-logo" src="assets/plugin-logo-128.png" alt="" aria-hidden="true">';
 const QUEUE_TEMPLATE = `# X 发帖队列
 
 timezone: Asia/Shanghai
 
 --- post ---
 id: post-001
-scheduled_at: 2026-06-08 09:30
+scheduled_at: 2026-06-16 09:30
 media: launch-cover.png
 
 第一条帖子正文。这里可以写多行，但不要在正文中使用独立一行的 --- post ---。
@@ -31,11 +32,13 @@ const AI_QUEUE_PROMPT = `请把我接下来给你的主题/素材改写成适合
 必须遵守以下格式：
 1. 每条帖子必须用独立一行 --- post --- 分隔。
 2. 每条帖子的元数据写在正文前面，可用字段只有 id、scheduled_at、media。
-3. scheduled_at 使用 YYYY-MM-DD HH:mm，例如 2026-06-08 09:30；不确定时间就省略，让插件自动排期。
+3. scheduled_at 使用 YYYY-MM-DD HH:mm，例如 2026-06-16 09:30；不确定时间就省略，让插件自动排期。
 4. media 只写文件名，多个文件用英文逗号分隔；没有媒体就省略。
-5. 元数据和正文之间必须空一行。
-6. 正文中不要出现独立一行 --- post ---。
-7. 不要输出解释、表格、代码围栏或额外说明，只输出队列正文。
+5. timezone 必须和用户浏览器时区一致；不确定时不要写 scheduled_at。
+6. 单个媒体文件和单次队列总媒体大小都不要超过 25MB。
+7. 元数据和正文之间必须空一行。
+8. 正文中不要出现独立一行 --- post ---。
+9. 不要输出解释、表格、代码围栏或额外说明，只输出队列正文。
 
 模板：
 ${QUEUE_TEMPLATE}`;
@@ -57,6 +60,9 @@ const els = {
   queueCount: document.getElementById("queueCount"),
   charCount: document.getElementById("charCount"),
   source: document.getElementById("source"),
+  deliveryModeInputs: [...document.querySelectorAll('input[name="deliveryMode"]')],
+  deliveryModeHint: document.getElementById("deliveryModeHint"),
+  scheduleOnlySections: [...document.querySelectorAll(".schedule-only")],
   manualScheduledAt: document.getElementById("manualScheduledAt"),
   scheduleMode: document.getElementById("scheduleMode"),
   dailyStartTime: document.getElementById("dailyStartTime"),
@@ -141,6 +147,7 @@ function bindEvents() {
   });
 
   const scheduleControls = [
+    ...els.deliveryModeInputs,
     els.scheduleMode,
     els.dailyStartTime,
     els.dailyEndTime,
@@ -202,6 +209,7 @@ async function restoreState() {
   if (saved[STORAGE_KEYS.source]) els.source.value = saved[STORAGE_KEYS.source];
 
   const options = saved[STORAGE_KEYS.options] || {};
+  setDeliveryMode(options.deliveryMode || "schedule");
   if (options.manualScheduledAt) els.manualScheduledAt.value = toDateTimePlaceholderFormat(options.manualScheduledAt);
   if (options.scheduleMode) els.scheduleMode.value = options.scheduleMode;
   if (options.dailyStartTime) els.dailyStartTime.value = options.dailyStartTime;
@@ -221,6 +229,7 @@ async function restoreState() {
 }
 
 function setDefaultTimes() {
+  setDeliveryMode("schedule");
   els.scheduleMode.value = "smart";
   els.dailyStartTime.value = "08:00";
   els.dailyEndTime.value = "23:00";
@@ -271,7 +280,8 @@ async function importTextQueue() {
 }
 
 async function importQueueText(raw, sourceName, sourceDetail = "") {
-  const importedPosts = parseSource(raw).map((post, index) => normalizeImportedPost(post, index));
+  const declaredTimezone = getDeliveryMode() === "schedule" ? validateDeclaredTimezone(raw) : "";
+  const importedPosts = parseSource(raw, { lenientSchedule: getDeliveryMode() === "draft" }).map((post, index) => normalizeImportedPost(post, index));
   if (!importedPosts.length) throw new Error("未识别到任何帖子。请使用独立一行的 --- post --- 分隔多条内容。");
   schedulePosts(importedPosts, { validateMedia: false });
 
@@ -283,7 +293,9 @@ async function importQueueText(raw, sourceName, sourceDetail = "") {
 
   try {
     schedulePosts(queuedPosts, { validateMedia: true });
-    setStatus(`已导入 ${queuedPosts.length} 条帖子，可调整排期规则后预览或开始。`);
+    setStatus(getDeliveryMode() === "draft"
+      ? `已导入 ${queuedPosts.length} 条帖子，当前会批量保存为草稿。`
+      : `已导入 ${queuedPosts.length} 条帖子${declaredTimezone ? `，时区 ${declaredTimezone}` : ""}，可调整排期规则后预览或开始。`);
   } catch (error) {
     setError(error.message);
     addLocalLog(`导入完成，媒体校验提醒：${error.message}`);
@@ -402,7 +414,11 @@ async function saveState() {
   try {
     schedulePosts(queuedPosts, { validateMedia: true });
     addLocalLog(`保存并更新队列预览：${queuedPosts.length} 条。`);
-    setStatus(hasDraft ? `草稿已保存，队列共 ${queuedPosts.length} 条。点击「开始」即可发布。` : `已重新排期：${queuedPosts.length} 条。`);
+    if (getDeliveryMode() === "draft") {
+      setStatus(hasDraft ? `草稿已保存，队列共 ${queuedPosts.length} 条。点击「存草稿」即可批量加入 X 草稿。` : `草稿预览已更新：${queuedPosts.length} 条。`);
+    } else {
+      setStatus(hasDraft ? `草稿已保存，队列共 ${queuedPosts.length} 条。点击「开始」即可排期。` : `已重新排期：${queuedPosts.length} 条。`);
+    }
   } catch (error) {
     addLocalLog(`保存完成，媒体校验提醒：${error.message}`);
     setError(error.message);
@@ -410,15 +426,15 @@ async function saveState() {
 }
 
 function previewQueue() {
-  if (els.source.value.trim()) {
+  if (els.source.value.trim() || manualMediaRefs.length > 0) {
     setError("当前草稿尚未保存。请先保存至队列后再预览或开始。");
     return;
   }
 
   try {
     renderQueue({ validateMedia: true });
-    addLocalLog(`预览通过：${queuedPosts.length} 条。`);
-    setStatus(`预览通过：${queuedPosts.length} 条。`);
+    addLocalLog(`${getDeliveryMode() === "draft" ? "草稿预览" : "排期预览"}通过：${queuedPosts.length} 条。`);
+    setStatus(`${getDeliveryMode() === "draft" ? "草稿预览" : "排期预览"}通过：${queuedPosts.length} 条。`);
   } catch (error) {
     addLocalLog(`预览失败：${error.message}`);
     setError(error.message);
@@ -426,22 +442,24 @@ function previewQueue() {
 }
 
 async function startQueue() {
-  if (els.source.value.trim()) {
+  if (els.source.value.trim() || manualMediaRefs.length > 0) {
     setError("当前草稿尚未保存。请先保存后再开始。");
     return;
   }
 
+  const deliveryMode = getDeliveryMode();
   let items;
   try {
     items = schedulePosts(queuedPosts, { validateMedia: true });
     if (!items.length) throw new Error("队列为空。请先保存帖子或导入文件。");
+    validateRunMediaPayload(items);
   } catch (error) {
     addLocalLog(`构建队列失败：${error.message}`);
     setError(error.message);
     return;
   }
 
-  addLocalLog(`准备开始：${items.length} 条，媒体 ${countMedia(items)} 个，总媒体大小 ${formatBytes(totalMediaBytes(items))}`);
+  addLocalLog(`准备${deliveryMode === "draft" ? "保存草稿" : "开始排期"}：${items.length} 条，媒体 ${countMedia(items)} 个，总媒体大小 ${formatBytes(totalMediaBytes(items))}`);
   const tab = await getActiveXTab();
   if (!tab) {
     addLocalLog("未找到 x.com / twitter.com 标签页。");
@@ -460,7 +478,7 @@ async function startQueue() {
 
   await persistState();
   renderPreview(items);
-  setStatus("正在准备媒体并发送队列，请不要关闭这个窗口。");
+  setStatus(deliveryMode === "draft" ? "正在准备媒体并发送草稿队列，请不要关闭这个窗口。" : "正在准备媒体并发送排期队列，请不要关闭这个窗口。");
 
   let outboundItems;
   try {
@@ -478,6 +496,7 @@ async function startQueue() {
       type: "xns-start-queue",
       items: outboundItems,
       options: {
+        deliveryMode,
         delayMs: Math.max(600, Number(els.delaySeconds.value || 1.2) * 1000)
       }
     });
@@ -489,7 +508,7 @@ async function startQueue() {
     }
 
     addLocalLog("页面脚本已接受队列，开始执行。");
-    setStatus("队列已发送到 X 页面执行。请保持 x.com 标签页打开。");
+    setStatus(deliveryMode === "draft" ? "草稿队列已发送到 X 页面执行。请保持 x.com 标签页打开。" : "排期队列已发送到 X 页面执行。请保持 x.com 标签页打开。");
   } catch (error) {
     addLocalLog(`发送失败：${error.message || String(error)}`);
     setError("页面脚本未响应，或媒体数据过大。请刷新 x.com 后重试；大视频建议用 Playwright CLI。");
@@ -573,18 +592,21 @@ function createManualPost(existingPost = null) {
   const text = els.source.value.trim();
   if (!text && !manualMediaRefs.length) throw new Error("当前草稿为空。");
 
-  const manualDate = els.manualScheduledAt.value ? parseDateTimeLocal(els.manualScheduledAt.value) : null;
-  if (els.manualScheduledAt.value && !manualDate) throw new Error("当前草稿时间无效。");
+  const shouldUseScheduleTime = getDeliveryMode() === "schedule";
+  const manualDate = shouldUseScheduleTime && els.manualScheduledAt.value ? parseDateTimeLocal(els.manualScheduledAt.value) : null;
+  if (shouldUseScheduleTime && els.manualScheduledAt.value && !manualDate) throw new Error("当前草稿时间无效。");
+  const scheduledAt = shouldUseScheduleTime ? manualDate : existingPost?.scheduledAt || null;
   const keepsDocumentTime = existingPost
     && existingPost.sourceType === "import"
     && !existingPost.lockedTime
+    && shouldUseScheduleTime
     && sameMinute(manualDate, existingPost.scheduledAt);
 
   return {
     id: existingPost?.id || nextQueuedPostId(),
     text,
-    scheduledAt: manualDate,
-    lockedTime: Boolean(manualDate) && !keepsDocumentTime,
+    scheduledAt,
+    lockedTime: shouldUseScheduleTime ? Boolean(manualDate) && !keepsDocumentTime : Boolean(existingPost?.lockedTime),
     mediaRefs: [...manualMediaRefs],
     sourceType: existingPost?.sourceType || "manual"
   };
@@ -603,6 +625,9 @@ function normalizeImportedPost(post, index) {
 
 function schedulePosts(posts, { validateMedia = true } = {}) {
   if (!posts.length) return [];
+  if (getDeliveryMode() === "draft") {
+    return buildDraftItems(posts, { validateMedia });
+  }
 
   const config = normalizeScheduleOptions(getOptions());
   const now = Date.now();
@@ -646,6 +671,7 @@ function schedulePosts(posts, { validateMedia = true } = {}) {
       id: post.id || `post-${String(index + 1).padStart(3, "0")}`,
       text,
       date,
+      deliveryMode: "schedule",
       queueIndex: index,
       scheduleSource,
       jittered,
@@ -656,6 +682,29 @@ function schedulePosts(posts, { validateMedia = true } = {}) {
   });
 
   return items.sort((a, b) => a.date.getTime() - b.date.getTime());
+}
+
+function buildDraftItems(posts, { validateMedia = true } = {}) {
+  return posts.map((post, index) => {
+    const text = String(post.text || "").trim();
+    if (!text && !(post.mediaRefs || []).length) throw new Error(`第 ${index + 1} 条内容为空。`);
+
+    const mediaFiles = validateMedia ? resolveMediaFiles(post, index) : collectAvailableMediaFiles(post);
+    if (validateMedia) validateMediaSet(mediaFiles, index);
+
+    return {
+      id: post.id || `post-${String(index + 1).padStart(3, "0")}`,
+      text,
+      date: null,
+      deliveryMode: "draft",
+      queueIndex: index,
+      scheduleSource: "保存草稿",
+      jittered: false,
+      scheduleNote: "",
+      mediaRefs: [...(post.mediaRefs || [])],
+      mediaFiles
+    };
+  });
 }
 
 function normalizeScheduleOptions(options) {
@@ -977,6 +1026,13 @@ function validateMediaSet(files, index) {
   }
 }
 
+function validateRunMediaPayload(items) {
+  const totalBytes = totalMediaBytes(items);
+  if (totalBytes > MAX_RUN_MEDIA_BYTES) {
+    throw new Error(`本次队列媒体总大小 ${formatBytes(totalBytes)} 超过 ${formatBytes(MAX_RUN_MEDIA_BYTES)}。请分批运行，避免扩展消息通道传输失败。`);
+  }
+}
+
 function renderQueue({ validateMedia = false, silent = false } = {}) {
   let items = [];
   try {
@@ -1003,15 +1059,16 @@ function renderPreview(items) {
   els.previewList.innerHTML = items.map((item, index) => {
     const media = item.mediaRefs.length ? escapeHtml(item.mediaRefs.join(", ")) : "无媒体";
     const editingClass = editingQueueIndex === item.queueIndex ? " is-editing" : "";
+    const isDraftItem = item.deliveryMode === "draft";
     return `
       <article class="preview-item${editingClass}" data-edit-queue-index="${item.queueIndex}">
-        <div class="avatar">${X_LOGO_HTML}</div>
+        <div class="avatar">${PLUGIN_LOGO_HTML}</div>
         <div>
           <div class="tweet-head">
-            <div class="account">X Scheduler <span>@queue · 已排期</span></div>
+            <div class="account">X Scheduler <span>@queue · ${isDraftItem ? "待存草稿" : "已排期"}</span></div>
             <div class="tweet-head-badges">
               <span class="time-badge count-badge">${index + 1}/${items.length}</span>
-              <span class="time-badge">${formatDateTime(item.date)}</span>
+              <span class="time-badge">${isDraftItem ? "不排期" : formatDateTime(item.date)}</span>
             </div>
           </div>
           <div class="tweet-body">${escapeHtml(item.text)}</div>
@@ -1038,9 +1095,10 @@ function renderScheduleBadges(item) {
 
 function renderEmptyPreview(message = "保存草稿或导入文件后，队列将显示在此处。") {
   clearPreviewMediaUrls();
+  const title = getDeliveryMode() === "draft" ? "暂无草稿预览" : "暂无排期预览";
   els.previewList.innerHTML = `
     <div class="empty-state">
-      <strong>暂无排期预览</strong>
+      <strong>${title}</strong>
       <span>${escapeHtml(message)}</span>
     </div>
   `;
@@ -1260,7 +1318,8 @@ async function prepareOutboundItems(items) {
   return Promise.all(items.map(async item => ({
     id: item.id,
     text: item.text,
-    dateMs: item.date.getTime(),
+    deliveryMode: item.deliveryMode || getDeliveryMode(),
+    dateMs: item.date ? item.date.getTime() : null,
     media: await Promise.all(item.mediaFiles.map(fileToPayload))
   })));
 }
@@ -1310,15 +1369,27 @@ async function ensureContentScript(tabId) {
   addLocalLog("页面脚本主动注入成功。");
 }
 
-function parseSource(raw) {
+function parseSource(raw, options = {}) {
   const text = unwrapQueueText(String(raw || "").trim());
   if (!text) return [];
 
   if (/^---\s*post\s*---\s*$/im.test(text)) {
-    return parsePostBlocks(text);
+    return parsePostBlocks(text, options);
   }
 
   return parseLoosePosts(text);
+}
+
+function validateDeclaredTimezone(raw) {
+  const match = String(raw || "").match(/^\s*timezone\s*:\s*([^\s#]+)/im);
+  if (!match) return "";
+
+  const declared = match[1].trim();
+  const local = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  if (local && declared !== local) {
+    throw new Error(`队列 timezone 为 ${declared}，当前浏览器时区为 ${local}。请改成当前浏览器时区，或省略 scheduled_at 让插件自动排期。`);
+  }
+  return declared;
 }
 
 function unwrapQueueText(text) {
@@ -1326,17 +1397,17 @@ function unwrapQueueText(text) {
   return match ? match[1].trim() : text;
 }
 
-function parsePostBlocks(raw) {
+function parsePostBlocks(raw, options = {}) {
   const chunks = raw
     .split(/^---\s*post\s*---\s*$/gim)
     .slice(1)
     .map(chunk => chunk.trim())
     .filter(Boolean);
 
-  return chunks.map((chunk, index) => parseSingleBlock(chunk, index));
+  return chunks.map((chunk, index) => parseSingleBlock(chunk, index, options));
 }
 
-function parseSingleBlock(chunk, index) {
+function parseSingleBlock(chunk, index, options = {}) {
   const lines = chunk.replace(/\r\n/g, "\n").split("\n");
   const meta = {};
   const mediaRefs = [];
@@ -1364,12 +1435,23 @@ function parseSingleBlock(chunk, index) {
 
   const body = lines.slice(cursor).join("\n").trim();
   const scheduled = meta.scheduled_at || meta.datetime || (meta.date && meta.time ? `${meta.date} ${meta.time}` : "");
+  const scheduledAt = parseOptionalPostSchedule(scheduled, options);
   return {
     id: meta.id || `post-${String(index + 1).padStart(3, "0")}`,
-    scheduledAt: scheduled ? parseHumanDateTime(scheduled) : null,
+    scheduledAt,
     mediaRefs,
     text: body
   };
+}
+
+function parseOptionalPostSchedule(value, options = {}) {
+  if (!value) return null;
+  if (!options.lenientSchedule) return parseHumanDateTime(value);
+  try {
+    return parseHumanDateTime(value);
+  } catch (_error) {
+    return null;
+  }
 }
 
 function parseMediaRefs(value) {
@@ -1394,6 +1476,7 @@ function parseLoosePosts(raw) {
 
 function getOptions() {
   return {
+    deliveryMode: getDeliveryMode(),
     manualScheduledAt: els.manualScheduledAt.value,
     scheduleMode: els.scheduleMode.value,
     dailyStartTime: els.dailyStartTime.value,
@@ -1408,6 +1491,17 @@ function getOptions() {
   };
 }
 
+function getDeliveryMode() {
+  return els.deliveryModeInputs.find(input => input.checked)?.value === "draft" ? "draft" : "schedule";
+}
+
+function setDeliveryMode(mode) {
+  const safeMode = mode === "draft" ? "draft" : "schedule";
+  for (const input of els.deliveryModeInputs) {
+    input.checked = input.value === safeMode;
+  }
+}
+
 function getScheduleStrategy() {
   return els.scheduleStrategyInputs.find(input => input.checked)?.value || "even";
 }
@@ -1420,12 +1514,36 @@ function setScheduleStrategy(strategy) {
 }
 
 function syncScheduleControls() {
+  const isDraftMode = getDeliveryMode() === "draft";
   const isFixed = getScheduleStrategy() === "fixed";
   const jitterEnabled = els.jitterEnabled.checked;
-  els.intervalMinutes.disabled = !isFixed;
-  els.fixedIntervalField.classList.toggle("schedule-field-disabled", !isFixed);
-  els.jitterMinutes.disabled = !jitterEnabled;
-  els.jitterMinutesField.classList.toggle("schedule-field-disabled", !jitterEnabled);
+  const scheduleOnlyInputs = [
+    els.manualScheduledAt,
+    els.scheduleMode,
+    els.dailyStartTime,
+    els.dailyEndTime,
+    els.startAt,
+    els.endAt,
+    els.jitterEnabled,
+    ...els.scheduleStrategyInputs
+  ];
+
+  for (const section of els.scheduleOnlySections) {
+    section.classList.toggle("is-disabled", isDraftMode);
+  }
+  for (const input of scheduleOnlyInputs) {
+    input.disabled = isDraftMode;
+  }
+
+  els.intervalMinutes.disabled = isDraftMode || !isFixed;
+  els.fixedIntervalField.classList.toggle("schedule-field-disabled", isDraftMode || !isFixed);
+  els.jitterMinutes.disabled = isDraftMode || !jitterEnabled;
+  els.jitterMinutesField.classList.toggle("schedule-field-disabled", isDraftMode || !jitterEnabled);
+  els.deliveryModeHint.textContent = isDraftMode
+    ? "保存草稿只会把内容加入 X 草稿，不打开定时排期。"
+    : "排期发布会逐条进入 X 原生定时流程。";
+  els.preview.textContent = isDraftMode ? "预览草稿" : "预览队列";
+  els.start.textContent = isDraftMode ? "存草稿" : "开始";
 }
 
 async function renderRunState(runState) {

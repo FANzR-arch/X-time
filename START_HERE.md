@@ -53,7 +53,7 @@ D:\00_Formula\03_Coding\X-time\test-media\sample-image.png
 D:\00_Formula\03_Coding\X-time\simulated_x_post_queue_with_video.md
 ```
 
-扩展测试版限制单个媒体 25MB。大视频建议用 Playwright CLI 版本。
+扩展测试版限制单个媒体和单次队列总媒体均不超过 25MB。大视频建议用 Playwright CLI 版本。
 
 ## 给 AI 的写作规范
 

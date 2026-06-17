@@ -4,14 +4,14 @@ timezone: Asia/Shanghai
 
 --- post ---
 id: post-001
-scheduled_at: 2026-06-08 09:30
+scheduled_at: 2026-06-16 09:30
 media: sample-image.png
 
 测试帖 1：这是带图片的模拟内容。成功后，它应该出现在 X 原生 Scheduled / Unsent Posts 列表里。
 
 --- post ---
 id: post-002
-scheduled_at: 2026-06-08 11:00
+scheduled_at: 2026-06-16 11:00
 
 测试帖 2：这是纯文本模拟内容。视频格式请参考 simulated_x_post_queue_with_video.md。
 

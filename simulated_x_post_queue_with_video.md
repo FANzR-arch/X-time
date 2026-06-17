@@ -4,7 +4,7 @@ timezone: Asia/Shanghai
 
 --- post ---
 id: post-video-001
-scheduled_at: 2026-06-08 15:00
+scheduled_at: 2026-06-16 15:00
 media: sample-video.mp4
 
 视频测试帖：把一个小 MP4 放到 `test-media` 文件夹，文件名改成 `sample-video.mp4`，然后在插件媒体库里选择它。

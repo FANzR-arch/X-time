@@ -1,6 +1,6 @@
 # X-time
 
-本仓库保存本地 Chrome/Edge 扩展 `X Native Scheduler Test Plugin`，用于把单条或多条 Markdown 帖子队列排入 X 网页原生定时发布流程。
+本仓库保存本地 Chrome/Edge 扩展 `X Native Scheduler Test Plugin`，用于把单条或多条 Markdown 帖子队列批量保存为 X 草稿，或排入 X 网页原生定时发布流程。
 
 扩展不调用 X API，不上传到第三方平台，也不保存账号密码。运行时依赖已经登录的 `x.com` 页面，并通过网页原生发帖/定时 UI 完成操作。
 
@@ -33,11 +33,12 @@ x-native-scheduler-test-plugin/
 
 1. 打开 `https://x.com/home` 并确认已经登录。
 2. 点击浏览器工具栏里的扩展图标，打开独立排程窗口。
-3. 手动输入一条帖子，或导入 `.md` / `.txt` 队列文件。
-4. 如队列里使用 `media:`，先在“媒体素材”里选择同名本地文件。
-5. 点击“预览队列”检查时间、内容和媒体匹配。
-6. 点击“开始”，执行日志会记录目标标签页、脚本注入、媒体大小、发送进度和原始错误。
-7. 完成后到 X 的 `Unsent posts / Scheduled` 里复核。
+3. 选择“排期发布”或“保存草稿”。选择“保存草稿”时不需要填写排期时间。
+4. 手动输入一条帖子，或导入 `.md` / `.txt` 队列文件。
+5. 如队列里使用 `media:`，先在“媒体素材”里选择同名本地文件。
+6. 点击“预览队列”或“预览草稿”检查内容和媒体匹配。
+7. 点击“开始”或“存草稿”，执行日志会记录目标标签页、脚本注入、媒体大小、发送进度和原始错误。
+8. 完成后到 X 的 `Unsent posts / Scheduled` 或草稿列表里复核。
 
 ## 队列格式
 
@@ -50,7 +51,7 @@ timezone: Asia/Shanghai
 
 --- post ---
 id: post-001
-scheduled_at: 2026-06-08 09:30
+scheduled_at: 2026-06-16 09:30
 media: launch-cover.png
 
 第一条帖子正文。
@@ -62,6 +63,8 @@ id: post-002
 ```
 
 更完整的写作规范见 `X_POST_QUEUE_FORMAT_SKILL.md`。
+
+如果队列文件声明了 `timezone:`，它必须和当前浏览器时区一致；否则插件会拒绝导入，避免跨时区定时静默错位。
 
 ## 打包
 
@@ -78,6 +81,7 @@ zip 属于可重新生成的本地交付物，默认不提交到 Git。
 提交前至少做一次轻量检查：
 
 ```powershell
+node tools/validate-extension.mjs
 node --check x-native-scheduler-test-plugin/background.js
 node --check x-native-scheduler-test-plugin/content.js
 node --check x-native-scheduler-test-plugin/popup.js
@@ -89,5 +93,5 @@ node --check x-native-scheduler-test-plugin/popup.js
 
 - 当前测试版支持普通文本、图片和小视频。
 - 暂不支持 GIF、投票、线程和长文。
-- 单个媒体测试限制为 25MB。
+- 单个媒体和单次队列总媒体测试限制均为 25MB。
 - 扩展不会绕过 X 的登录、安全校验、验证码、风控或平台规则。
