@@ -269,15 +269,18 @@
 
     try {
       await openScheduleDialog(editable);
-    } catch (_error) {
+      await setScheduleDialog(new Date(item.scheduledEpochMs));
+      await confirmScheduleDialog();
+      await publishScheduledReply(editable);
+    } catch (error) {
+      const code = error.code || classifyReplyError(error);
+      if (code !== "REPLY_SCHEDULE_UNAVAILABLE") throw error;
+      await discardReplyComposer(editable);
       throw replyError(
         "REPLY_SCHEDULE_UNAVAILABLE",
-        "回复编辑器没有原生排期按钮，已停止且未立即发送。"
+        "回复编辑器没有原生排期按钮，已关闭该回复草稿并跳过。"
       );
     }
-    await setScheduleDialog(new Date(item.scheduledEpochMs));
-    await confirmScheduleDialog();
-    await publishScheduledReply(editable);
     return {
       ok: true,
       status: "scheduled",
@@ -352,6 +355,42 @@
       12_000,
       "点击排期后无法确认回复编辑器已关闭，请在 X 定时列表中人工复核。"
     );
+  }
+
+  async function discardReplyComposer(editable) {
+    const scope = getComposerScope(editable);
+    await clearComposer(editable);
+    await waitFor(
+      () => comparableComposerText(getComposerText(editable)).length === 0,
+      3_000,
+      "无法清空待跳过的回复草稿。"
+    );
+
+    const closeButton = findVisible([
+      '[data-testid="app-bar-close"]',
+      '[aria-label="Close"]',
+      '[aria-label*="Close"]',
+      '[aria-label*="关闭"]'
+    ], scope) || findButtonByText(["Close", "关闭"], scope);
+    if (closeButton) {
+      realClick(closeButton);
+      await sleep(400);
+    }
+
+    if (!document.contains(editable) || !isVisible(editable)) return;
+
+    const dialog = getActiveDialog();
+    const discardButton = dialog
+      ? findButtonByText(["Discard", "放弃", "舍弃", "丢弃"], dialog)
+      : null;
+    if (discardButton && !isDisabled(discardButton)) {
+      realClick(discardButton);
+      await sleep(500);
+    }
+
+    if (document.contains(editable) && isVisible(editable) && comparableComposerText(getComposerText(editable))) {
+      throw replyError("REPLY_DISCARD_FAILED", "无法关闭待跳过的回复草稿，队列已停止以避免弹出离站确认。");
+    }
   }
 
   function replyError(code, message) {
@@ -490,6 +529,11 @@
   }
 
   async function clearComposer(editable) {
+    if (!editable.isContentEditable) {
+      setNativeValue(editable, "");
+      await sleep(150);
+      return;
+    }
     editable.focus();
     const selection = window.getSelection();
     const range = document.createRange();
