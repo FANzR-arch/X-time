@@ -57,13 +57,13 @@
       return false;
     }
 
-    if (message.type === "xns-send-reply-now") {
+    if (message.type === "xns-process-reply") {
       if (state.running) {
         sendResponse({ ok: false, code: "QUEUE_BUSY", error: "原创帖子队列正在运行。" });
         return false;
       }
       replyStopRequested = false;
-      processDueReply(message.item || {})
+      processScheduledReply(message.item || {})
         .then((result) => sendResponse(result))
         .catch((error) => sendResponse({
           ok: false,
@@ -235,7 +235,7 @@
     await publishScheduledPost(editable);
   }
 
-  async function processDueReply(rawItem) {
+  async function processScheduledReply(rawItem) {
     if (!globalThis.XnsReply) throw replyError("REPLY_CORE_MISSING", "回复安全模块未加载，请刷新 X 页面后重试。");
     const item = normalizeReplyItem(rawItem);
     const currentStatusId = XnsReply.statusIdFromUrl(location.href);
@@ -266,20 +266,36 @@
     assertReplyComposer(editable);
     await fillComposer(editable, item.text);
     if (replyStopRequested) throw replyError("REPLY_STOPPED", "用户已停止回复队列。");
-    await publishDueReply(editable);
+
+    try {
+      await openScheduleDialog(editable);
+    } catch (_error) {
+      throw replyError(
+        "REPLY_SCHEDULE_UNAVAILABLE",
+        "回复编辑器没有原生排期按钮，已停止且未立即发送。"
+      );
+    }
+    await setScheduleDialog(new Date(item.scheduledEpochMs));
+    await confirmScheduleDialog();
+    await publishScheduledReply(editable);
     return {
       ok: true,
-      status: "sent",
-      targetStatusId: item.targetStatusId
+      status: "scheduled",
+      targetStatusId: item.targetStatusId,
+      scheduledEpochMs: item.scheduledEpochMs
     };
   }
 
   function normalizeReplyItem(rawItem) {
     const targetStatusId = String(rawItem.targetStatusId || "").trim();
     const text = normalizedText(rawItem.text);
+    const scheduledEpochMs = Number(rawItem.scheduledEpochMs);
     if (!/^\d+$/.test(targetStatusId)) throw replyError("TARGET_INVALID", "目标帖子 ID 无效。");
     if (!text) throw replyError("REPLY_EMPTY", "回复内容为空。");
-    return { targetStatusId, text };
+    if (!Number.isFinite(scheduledEpochMs) || scheduledEpochMs <= Date.now() + 60_000) {
+      throw replyError("SCHEDULE_INVALID", "回复排期时间必须晚于当前时间至少 1 分钟。");
+    }
+    return { targetStatusId, text, scheduledEpochMs };
   }
 
   function findTargetArticle(targetStatusId) {
@@ -315,27 +331,26 @@
     }
   }
 
-  async function publishDueReply(editable) {
+  async function publishScheduledReply(editable) {
     if (replyStopRequested) throw replyError("REPLY_STOPPED", "用户已停止回复队列。");
     const scope = getComposerScope(editable);
     const candidate = await waitFor(() => {
       const buttons = [...scope.querySelectorAll('button,[role="button"]')].filter(isVisible);
       return buttons.find((button) => {
         const label = button.innerText || button.getAttribute("aria-label") || "";
-        return !isDisabled(button) && XnsReply.isSafeReplyAction(label);
+        return !isDisabled(button) && XnsReply.isSafeScheduleAction(label);
       }) || null;
-    }, 10_000, "回复编辑器没有可确认的回复按钮，已停止且未发送。");
+    }, 10_000, "回复编辑器没有可确认的原生排期按钮，已停止且未立即发送。");
 
     const label = candidate.innerText || candidate.getAttribute("aria-label") || "";
-    if (!XnsReply.isSafeReplyAction(label)) {
-      throw replyError("REPLY_ACTION_UNCONFIRMED", "最终按钮不是明确的回复操作，已停止且未发送。");
+    if (!XnsReply.isSafeScheduleAction(label)) {
+      throw replyError("REPLY_SCHEDULE_UNAVAILABLE", "最终按钮不是明确的原生排期操作，已停止且未立即发送。");
     }
-    if (replyStopRequested) throw replyError("REPLY_STOPPED", "用户已停止回复队列。");
     realClick(candidate);
     await waitFor(
       () => !document.contains(editable) || !isVisible(editable),
       12_000,
-      "点击回复后无法确认编辑器已关闭，请在目标帖子中人工复核。"
+      "点击排期后无法确认回复编辑器已关闭，请在 X 定时列表中人工复核。"
     );
   }
 
@@ -347,10 +362,10 @@
 
   function classifyReplyError(error) {
     const message = error?.message || String(error || "");
-    if (/回复按钮|回复操作/.test(message)) return "REPLY_ACTION_UNCONFIRMED";
+    if (/排期按钮|定时按钮|原生排期/.test(message)) return "REPLY_SCHEDULE_UNAVAILABLE";
     if (/目标帖子|当前页面/.test(message)) return "TARGET_UNAVAILABLE";
     if (/用户已停止/.test(message)) return "REPLY_STOPPED";
-    return "REPLY_SEND_FAILED";
+    return "REPLY_SCHEDULE_FAILED";
   }
 
   async function openComposer({ forceModal = false } = {}) {

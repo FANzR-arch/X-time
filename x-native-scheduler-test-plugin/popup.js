@@ -629,18 +629,14 @@ async function startQueue() {
 
   if (isReplyMode()) {
     const existing = (await chrome.storage.local.get(STORAGE_KEYS.replyRunState))[STORAGE_KEYS.replyRunState];
-    const completed = existing?.items?.filter((item) => item.status === "sent").length || 0;
-    if (existing?.status === "running") {
-      setError("已有回复排期正在等待或发送。请先停止，或等待该队列完成。");
-      return;
-    }
-    if (["failed", "stopped"].includes(existing?.status) && completed > 0) {
-      setError(`已有 ${completed} 条回复已发送。请点击「恢复未发送任务」，避免重复回复。`);
+    const completed = existing?.items?.filter((item) => item.status === "scheduled").length || 0;
+    if (["failed", "stopping"].includes(existing?.status) && completed > 0) {
+      setError(`已有 ${completed} 条回复完成。请点击「从失败项继续」，避免重复排期。`);
       return;
     }
   }
 
-  addLocalLog(`准备${isReplyMode() ? "定时回复" : deliveryMode === "draft" ? "保存草稿" : "开始排期"}：${items.length} 条，媒体 ${countMedia(items)} 个，总媒体大小 ${formatBytes(totalMediaBytes(items))}`);
+  addLocalLog(`准备${isReplyMode() ? "回复排期" : deliveryMode === "draft" ? "保存草稿" : "开始排期"}：${items.length} 条，媒体 ${countMedia(items)} 个，总媒体大小 ${formatBytes(totalMediaBytes(items))}`);
   const tab = await getActiveXTab();
   if (!tab) {
     addLocalLog("未找到 x.com / twitter.com 标签页。");
@@ -662,7 +658,7 @@ async function startQueue() {
   await persistState();
   renderPreview(items);
   setStatus(isReplyMode()
-    ? "正在把回复任务保存到扩展后台排期。"
+    ? "正在发送回复队列到后台，请保持目标 X 标签页打开。"
     : deliveryMode === "draft"
       ? "正在准备媒体并发送草稿队列，请不要关闭这个窗口。"
       : "正在准备媒体并发送排期队列，请不要关闭这个窗口。");
@@ -701,7 +697,7 @@ async function startQueue() {
 
     addLocalLog(`${isReplyMode() ? "扩展后台" : "页面脚本"}已接受队列，开始执行。`);
     setStatus(isReplyMode()
-      ? "定时回复已保存。到点后扩展会打开目标帖子、填入内容并发送；请保持浏览器运行且 X 已登录。"
+      ? "回复队列已启动。后台会逐条打开目标帖子并使用 X 原生排期。"
       : deliveryMode === "draft"
         ? "草稿队列已发送到 X 页面执行。请保持 x.com 标签页打开。"
         : "排期队列已发送到 X 页面执行。请保持 x.com 标签页打开。");
@@ -719,7 +715,7 @@ async function stopQueue() {
       return;
     }
     addLocalLog("已发送回复队列停止请求。");
-    setStatus("回复排期已停止，未发送任务仍保留。");
+    setStatus("已发送停止请求，当前步骤结束后不再继续。");
     return;
   }
   const tab = await getActiveXTab();
@@ -751,12 +747,12 @@ async function resumeReplyQueue() {
     setError(response?.error || "恢复回复队列失败。");
     return;
   }
-  addLocalLog("已恢复未发送的回复任务。");
+  addLocalLog("已从失败项恢复回复队列。");
   await renderRunState(response.state);
 }
 
 async function resetPluginState() {
-  const confirmed = window.confirm("确定重置插件状态？这会停止并清空当前草稿、队列、定时回复、已选媒体、排期设置和日志，但不会删除 X 页面里已经生成的内容。");
+  const confirmed = window.confirm("确定重置插件状态？这会清空当前草稿、队列、已选媒体、排期设置和日志，但不会删除 X 页面里已经生成的草稿。");
   if (!confirmed) return;
 
   clearTimeout(persistTimer);
@@ -1322,7 +1318,6 @@ function renderPreview(items) {
     const media = item.mediaRefs.length ? escapeHtml(item.mediaRefs.join(", ")) : "无媒体";
     const editingClass = editingQueueIndex === item.queueIndex ? " is-editing" : "";
     const isDraftItem = item.deliveryMode === "draft";
-    const accountState = isDraftItem ? "待存草稿" : item.itemType === "reply" ? "待定时发送" : "已排期";
     const editAttribute = isReplyMode() ? "" : ` data-edit-queue-index="${item.queueIndex}"`;
     const targetLine = item.itemType === "reply"
       ? `<div class="input-hint">目标帖：${escapeHtml(item.targetUrl)}</div>`
@@ -1332,7 +1327,7 @@ function renderPreview(items) {
         <div class="avatar">${PLUGIN_LOGO_HTML}</div>
         <div>
           <div class="tweet-head">
-            <div class="account">X Scheduler <span>@queue · ${accountState}</span></div>
+            <div class="account">X Scheduler <span>@queue · ${isDraftItem ? "待存草稿" : "已排期"}</span></div>
             <div class="tweet-head-badges">
               <span class="time-badge count-badge">${index + 1}/${items.length}</span>
               <span class="time-badge">${isDraftItem ? "不排期" : `${escapeHtml(XnsTimezone.formatZoneLabel(item.targetTimezone, item.dateMs))} ${formatDateTime(item.date)}`}</span>
@@ -1881,7 +1876,7 @@ async function renderRunState(runState) {
   if (!state) return;
 
   const replyProgress = isReplyMode() && Array.isArray(state.items)
-    ? `${state.items.filter((item) => item.status === "sent").length}/${state.items.length}`
+    ? `${state.items.filter((item) => item.status === "scheduled").length}/${state.items.length}`
     : "";
   const showProgress = state.status === "running" && state.progress;
   const progress = replyProgress || (showProgress ? `${state.progress.current || 0}/${state.progress.total || 0}` : "");
