@@ -139,8 +139,9 @@
       updatedAt: now,
       items: items.map((item) => ({
         ...item,
-        status: item.status === "scheduled" ? "scheduled" : "queued",
+        status: isReplyTerminalStatus(item.status) ? item.status : "queued",
         error: "",
+        skipReason: item.status === "skipped" ? String(item.skipReason || "") : "",
         completedAt: item.completedAt || null
       }))
     };
@@ -160,10 +161,25 @@
       error: "",
       completedAt
     }), { error: "", updatedAt: completedAt });
-    const currentIndex = next.items.findIndex((item) => item.status !== "scheduled");
+    return advanceReplyState(next);
+  }
+
+  function markReplySkipped(state, id, reason, completedAt = Date.now()) {
+    const next = updateItem(state, id, (item) => ({
+      ...item,
+      status: "skipped",
+      error: "",
+      skipReason: String(reason || "回复编辑器没有原生排期按钮。"),
+      completedAt
+    }), { error: "", updatedAt: completedAt });
+    return advanceReplyState(next);
+  }
+
+  function advanceReplyState(state) {
+    const currentIndex = state.items.findIndex((item) => !isReplyTerminalStatus(item.status));
     return {
-      ...next,
-      currentIndex: currentIndex < 0 ? next.items.length : currentIndex,
+      ...state,
+      currentIndex: currentIndex < 0 ? state.items.length : currentIndex,
       status: currentIndex < 0 ? "done" : "running"
     };
   }
@@ -184,7 +200,7 @@
         ? { ...item, status: "queued", error: "" }
         : { ...item }
     ));
-    const currentIndex = items.findIndex((item) => item.status !== "scheduled");
+    const currentIndex = items.findIndex((item) => !isReplyTerminalStatus(item.status));
     return {
       ...state,
       items,
@@ -218,6 +234,10 @@
     return /\bschedul(?:e|ed|ing)\b/i.test(value) || /定时|安排|排程/.test(value);
   }
 
+  function isReplyTerminalStatus(status) {
+    return status === "scheduled" || status === "skipped";
+  }
+
   return {
     parseReplyQueue,
     normalizeStatusUrl,
@@ -225,6 +245,7 @@
     createReplyRunState,
     markReplyProcessing,
     markReplyScheduled,
+    markReplySkipped,
     markReplyFailed,
     markReplyStopping,
     resumeReplyRunState,

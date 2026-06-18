@@ -196,24 +196,43 @@ async function processCurrentReply(state, item, tabId) {
     }
   });
   if (!response?.ok || response.status !== "scheduled") {
+    if (response?.code === "REPLY_SCHEDULE_UNAVAILABLE") {
+      await completeCurrentReply(item, {
+        outcome: "skipped",
+        reason: response.error || "回复编辑器没有原生排期按钮。"
+      });
+      return;
+    }
     const error = new Error(response?.error || "X 页面没有确认回复已排期。");
     error.code = response?.code || "REPLY_SCHEDULE_FAILED";
     throw error;
   }
 
+  await completeCurrentReply(item, { outcome: "scheduled" });
+}
+
+async function completeCurrentReply(item, { outcome, reason = "" }) {
   const latest = await readReplyState();
   if (!latest) throw new Error("回复队列状态丢失。");
-  let advanced = XnsReply.markReplyScheduled(latest, item.id, Date.now());
+  const itemIndex = latest.items.findIndex((candidate) => candidate.id === item.id);
+  let advanced = outcome === "skipped"
+    ? XnsReply.markReplySkipped(latest, item.id, reason, Date.now())
+    : XnsReply.markReplyScheduled(latest, item.id, Date.now());
   const wasStopping = latest.status === "stopping";
   if (wasStopping && advanced.status !== "done") advanced = { ...advanced, status: "stopping" };
+  const scheduledCount = advanced.items.filter((candidate) => candidate.status === "scheduled").length;
+  const skippedCount = advanced.items.filter((candidate) => candidate.status === "skipped").length;
+  const outcomeText = outcome === "skipped" ? "跳过" : "排期";
   advanced = await persistReplyState(
     advanced,
     advanced.status === "done"
-      ? "回复排期队列已完成。"
+      ? `回复排期队列已完成：排期 ${scheduledCount} 条，跳过 ${skippedCount} 条。`
       : wasStopping
-        ? "当前回复已排期，队列已停止。"
-        : `已排期 ${advanced.currentIndex}/${advanced.items.length} 条，准备下一条。`,
-    `SCHEDULED ${item.id}`
+        ? `当前回复已${outcomeText}，队列已停止。`
+        : outcome === "skipped"
+          ? `第 ${itemIndex + 1}/${advanced.items.length} 条没有原生排期按钮，已跳过并继续。`
+          : `已处理 ${scheduledCount + skippedCount}/${advanced.items.length} 条，准备下一条。`,
+    outcome === "skipped" ? `SKIPPED ${item.id} REPLY_SCHEDULE_UNAVAILABLE` : `SCHEDULED ${item.id}`
   );
   if (advanced.status === "running") {
     await chrome.alarms.create(REPLY_NEXT_ALARM, { when: Date.now() + advanced.delayMs });

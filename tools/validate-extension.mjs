@@ -107,6 +107,9 @@ function validateNativeReplySchedulingFlow() {
   if (contentJs.includes('message.type === "xns-send-reply-now"')) {
     errors.push("reply scheduling must never fall back to extension-timed direct sending");
   }
+  if (!backgroundJs.includes('response?.code === "REPLY_SCHEDULE_UNAVAILABLE"') || !backgroundJs.includes("markReplySkipped")) {
+    errors.push("missing native reply scheduling must be skipped without stopping the queue");
+  }
 }
 
 function validatePopupResources() {

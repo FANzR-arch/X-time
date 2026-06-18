@@ -78,6 +78,21 @@ test("resume does not requeue scheduled items", () => {
   assert.equal(resumed.currentIndex, 1);
 });
 
+test("skips a reply without a native schedule action and advances", () => {
+  const state = reply.createReplyRunState([{ id: "a" }, { id: "b" }]);
+  const skipped = reply.markReplySkipped(state, "a", "no native scheduler", 1000);
+  assert.equal(skipped.items[0].status, "skipped");
+  assert.equal(skipped.items[0].skipReason, "no native scheduler");
+  assert.equal(skipped.items[0].completedAt, 1000);
+  assert.equal(skipped.currentIndex, 1);
+
+  const failed = reply.markReplyFailed(skipped, "b", "boom");
+  const resumed = reply.resumeReplyRunState(failed);
+  assert.equal(resumed.items[0].status, "skipped");
+  assert.equal(resumed.items[1].status, "queued");
+  assert.equal(resumed.currentIndex, 1);
+});
+
 test("stop marks the run as stopping without changing item completion", () => {
   const state = reply.createReplyRunState([{ id: "a" }, { id: "b" }]);
   const advanced = reply.markReplyScheduled(state, "a", 1000);

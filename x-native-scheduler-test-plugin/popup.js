@@ -645,7 +645,7 @@ async function startQueue() {
 
   if (isReplyMode()) {
     const existing = (await chrome.storage.local.get(STORAGE_KEYS.replyRunState))[STORAGE_KEYS.replyRunState];
-    const completed = existing?.items?.filter((item) => item.status === "scheduled").length || 0;
+    const completed = existing?.items?.filter((item) => ["scheduled", "skipped"].includes(item.status)).length || 0;
     if (["failed", "stopping"].includes(existing?.status) && completed > 0) {
       setError(`已有 ${completed} 条回复完成。请点击「从失败项继续」，避免重复排期。`);
       return;
@@ -1953,7 +1953,7 @@ async function renderRunState(runState) {
   if (!state) return;
 
   const replyProgress = isReplyMode() && Array.isArray(state.items)
-    ? `${state.items.filter((item) => item.status === "scheduled").length}/${state.items.length}`
+    ? `${state.items.filter((item) => ["scheduled", "skipped"].includes(item.status)).length}/${state.items.length}`
     : "";
   const showProgress = state.status === "running" && state.progress;
   const progress = replyProgress || (showProgress ? `${state.progress.current || 0}/${state.progress.total || 0}` : "");
