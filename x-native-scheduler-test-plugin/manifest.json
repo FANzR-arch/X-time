@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "X Native Scheduler Test Plugin",
-  "version": "0.7.0",
-  "description": "Local original-post and text-reply queues using X's native scheduler with selectable target timezones.",
+  "version": "0.8.0",
+  "description": "Local original-post scheduling and extension-timed text replies with selectable target timezones.",
   "permissions": [
     "activeTab",
     "alarms",

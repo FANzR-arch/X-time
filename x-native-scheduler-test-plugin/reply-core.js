@@ -127,22 +127,31 @@
 
   function createReplyRunState(items, { tabId = null, delayMs = 1200, now = Date.now() } = {}) {
     if (!Array.isArray(items) || items.length === 0) throw new Error("没有收到有效的回复队列。");
+    const normalizedItems = items.map((item, index) => {
+      const dateMs = Number(item.dateMs);
+      if (!Number.isFinite(dateMs)) throw new Error(`第 ${index + 1} 条回复时间无效。`);
+      return {
+        ...item,
+        dateMs,
+        status: item.status === "sent" || item.status === "scheduled" ? "sent" : "pending",
+        error: "",
+        completedAt: item.completedAt || null,
+        sourceIndex: index
+      };
+    }).sort((a, b) => a.dateMs - b.dateMs || a.sourceIndex - b.sourceIndex)
+      .map(({ sourceIndex: _sourceIndex, ...item }) => item);
+    const currentIndex = normalizedItems.findIndex((item) => item.status !== "sent");
     return {
-      status: "running",
+      status: currentIndex < 0 ? "done" : "running",
       tabId,
       delayMs: Math.max(600, Number(delayMs || 1200)),
-      currentIndex: 0,
+      currentIndex: currentIndex < 0 ? normalizedItems.length : currentIndex,
       error: "",
-      message: "回复队列已创建。",
+      message: "回复任务已加入扩展排期。",
       log: [],
       createdAt: now,
       updatedAt: now,
-      items: items.map((item) => ({
-        ...item,
-        status: item.status === "scheduled" ? "scheduled" : "queued",
-        error: "",
-        completedAt: item.completedAt || null
-      }))
+      items: normalizedItems
     };
   }
 
@@ -153,14 +162,14 @@
     });
   }
 
-  function markReplyScheduled(state, id, completedAt = Date.now()) {
+  function markReplySent(state, id, completedAt = Date.now()) {
     const next = updateItem(state, id, (item) => ({
       ...item,
-      status: "scheduled",
+      status: "sent",
       error: "",
       completedAt
     }), { error: "", updatedAt: completedAt });
-    const currentIndex = next.items.findIndex((item) => item.status !== "scheduled");
+    const currentIndex = next.items.findIndex((item) => item.status !== "sent");
     return {
       ...next,
       currentIndex: currentIndex < 0 ? next.items.length : currentIndex,
@@ -181,10 +190,10 @@
   function resumeReplyRunState(state, now = Date.now()) {
     const items = state.items.map((item) => (
       item.status === "failed" || item.status === "processing"
-        ? { ...item, status: "queued", error: "" }
+        ? { ...item, status: "pending", error: "" }
         : { ...item }
     ));
-    const currentIndex = items.findIndex((item) => item.status !== "scheduled");
+    const currentIndex = items.findIndex((item) => item.status !== "sent");
     return {
       ...state,
       items,
@@ -195,13 +204,58 @@
     };
   }
 
-  function markReplyStopping(state, now = Date.now()) {
+  function markReplyStopped(state, now = Date.now()) {
     return {
       ...state,
-      status: "stopping",
-      message: "收到停止请求，当前步骤完成后不再继续。",
+      status: "stopped",
+      message: "回复排期已停止，未发送任务仍保留。",
       updatedAt: now,
       items: state.items.map((item) => ({ ...item }))
+    };
+  }
+
+  function nextReplyAlarmAt(state, now = Date.now(), minimumDelayMs = 250) {
+    if (!state || state.status !== "running") return null;
+    const next = state.items.find((item) => item.status === "pending");
+    if (!next) return null;
+    return Math.max(Number(next.dateMs), Number(now) + Math.max(0, Number(minimumDelayMs || 0)));
+  }
+
+  function recoverInterruptedReplyRunState(state, now = Date.now()) {
+    if (!state || !Array.isArray(state.items)) return state;
+    const interrupted = state.items.find((item) => item.status === "processing");
+    if (!interrupted) return state;
+    return markReplyFailed(
+      state,
+      interrupted.id,
+      "上次发送过程被中断，结果未知。请先在目标帖子检查，再决定是否恢复未发送任务。",
+      now
+    );
+  }
+
+  function migrateReplyRunState(state) {
+    if (!state || !Array.isArray(state.items)) return state;
+    const hasLegacy = state.status === "stopping"
+      || state.items.some((item) => item.status === "queued" || item.status === "scheduled");
+    if (!hasLegacy) return state;
+    const items = state.items.map((item) => ({
+      ...item,
+      status: item.status === "scheduled"
+        ? "sent"
+        : item.status === "queued"
+          ? "pending"
+          : item.status
+    }));
+    const currentIndex = items.findIndex((item) => item.status !== "sent");
+    return {
+      ...state,
+      status: state.status === "stopping"
+        ? "stopped"
+        : currentIndex < 0
+          ? "done"
+          : state.status,
+      items,
+      currentIndex: currentIndex < 0 ? items.length : currentIndex
     };
   }
 
@@ -212,10 +266,11 @@
     return { ...state, ...statePatch, items };
   }
 
-  function isSafeScheduleAction(label) {
+  function isSafeReplyAction(label) {
     const value = String(label || "").replace(/\s+/g, " ").trim();
     if (!value) return false;
-    return /\bschedul(?:e|ed|ing)\b/i.test(value) || /定时|安排|排程/.test(value);
+    return /^(?:reply|reply now|send reply)$/i.test(value)
+      || /^(?:回复|立即回复|发送回复|回覆|立即回覆)$/.test(value);
   }
 
   return {
@@ -224,10 +279,13 @@
     statusIdFromUrl,
     createReplyRunState,
     markReplyProcessing,
-    markReplyScheduled,
+    markReplySent,
     markReplyFailed,
-    markReplyStopping,
+    markReplyStopped,
     resumeReplyRunState,
-    isSafeScheduleAction
+    nextReplyAlarmAt,
+    recoverInterruptedReplyRunState,
+    migrateReplyRunState,
+    isSafeReplyAction
   };
 });

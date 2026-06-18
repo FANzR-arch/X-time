@@ -108,8 +108,25 @@ function validatePopupResources() {
   }
 
   const backgroundJs = readFileSync(join(extensionDir, "background.js"), "utf8");
-  if (!backgroundJs.includes('importScripts("reply-core.js")')) {
-    errors.push("background.js must import reply-core.js");
+  if (!backgroundJs.includes('importScripts("timezone-core.js", "reply-core.js")')) {
+    errors.push("background.js must import timezone-core.js and reply-core.js");
+  }
+  if (!backgroundJs.includes('type: "xns-send-reply-now"')) {
+    errors.push("background.js must dispatch due replies with xns-send-reply-now");
+  }
+  if (!backgroundJs.includes("chrome.alarms.create(REPLY_NEXT_ALARM")) {
+    errors.push("background.js must schedule reply tasks with chrome.alarms");
+  }
+
+  const contentJs = readFileSync(join(extensionDir, "content.js"), "utf8");
+  if (!contentJs.includes('message.type === "xns-send-reply-now"')) {
+    errors.push("content.js must handle xns-send-reply-now");
+  }
+  if (!contentJs.includes("XnsReply.isSafeReplyAction(label)")) {
+    errors.push("content.js must validate the final reply action label");
+  }
+  if (contentJs.includes('message.type === "xns-process-reply"') || contentJs.includes("isSafeScheduleAction")) {
+    errors.push("content.js still contains the obsolete native scheduled-reply path");
   }
 }
 

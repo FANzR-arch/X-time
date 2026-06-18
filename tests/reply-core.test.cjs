@@ -57,42 +57,88 @@ second`, { targetTimezone: "Asia/Shanghai" });
   assert.match(items.warnings[0], /重复/);
 });
 
-test("moves a reply through queued, processing, and scheduled", () => {
-  const state = reply.createReplyRunState([{ id: "a" }, { id: "b" }]);
+test("sorts scheduled replies and moves one through pending, processing, and sent", () => {
+  const state = reply.createReplyRunState([
+    { id: "b", dateMs: 3000 },
+    { id: "a", dateMs: 2000 }
+  ], { now: 1000 });
+  assert.deepEqual(state.items.map((item) => item.id), ["a", "b"]);
+  assert.equal(state.items[0].status, "pending");
   const processing = reply.markReplyProcessing(state, "a");
   assert.equal(processing.items[0].status, "processing");
-  const advanced = reply.markReplyScheduled(processing, "a", 1000);
-  assert.equal(advanced.items[0].status, "scheduled");
-  assert.equal(advanced.items[0].completedAt, 1000);
+  const advanced = reply.markReplySent(processing, "a", 2500);
+  assert.equal(advanced.items[0].status, "sent");
+  assert.equal(advanced.items[0].completedAt, 2500);
   assert.equal(advanced.currentIndex, 1);
 });
 
-test("resume does not requeue scheduled items", () => {
-  const state = reply.createReplyRunState([{ id: "a" }, { id: "b" }]);
-  const advanced = reply.markReplyScheduled(state, "a", 1000);
+test("resume does not requeue sent items", () => {
+  const state = reply.createReplyRunState([
+    { id: "a", dateMs: 2000 },
+    { id: "b", dateMs: 3000 }
+  ], { now: 1000 });
+  const advanced = reply.markReplySent(state, "a", 2500);
   const failed = reply.markReplyFailed(advanced, "b", "boom");
   const resumed = reply.resumeReplyRunState(failed);
   assert.equal(resumed.status, "running");
-  assert.equal(resumed.items[0].status, "scheduled");
-  assert.equal(resumed.items[1].status, "queued");
+  assert.equal(resumed.items[0].status, "sent");
+  assert.equal(resumed.items[1].status, "pending");
   assert.equal(resumed.currentIndex, 1);
 });
 
-test("stop marks the run as stopping without changing item completion", () => {
-  const state = reply.createReplyRunState([{ id: "a" }, { id: "b" }]);
-  const advanced = reply.markReplyScheduled(state, "a", 1000);
-  const stopping = reply.markReplyStopping(advanced, 2000);
-  assert.equal(stopping.status, "stopping");
-  assert.equal(stopping.items[0].status, "scheduled");
-  assert.equal(stopping.items[1].status, "queued");
-  assert.equal(stopping.updatedAt, 2000);
+test("stop preserves sent and pending item states", () => {
+  const state = reply.createReplyRunState([
+    { id: "a", dateMs: 2000 },
+    { id: "b", dateMs: 3000 }
+  ], { now: 1000 });
+  const advanced = reply.markReplySent(state, "a", 2500);
+  const stopped = reply.markReplyStopped(advanced, 2600);
+  assert.equal(stopped.status, "stopped");
+  assert.equal(stopped.items[0].status, "sent");
+  assert.equal(stopped.items[1].status, "pending");
+  assert.equal(stopped.updatedAt, 2600);
 });
 
-test("only accepts explicit schedule action labels", () => {
-  for (const label of ["Schedule", "Schedule reply", "定时发送", "安排", "排程"]) {
-    assert.equal(reply.isSafeScheduleAction(label), true, label);
+test("computes the next alarm and wakes overdue replies immediately", () => {
+  const state = reply.createReplyRunState([
+    { id: "a", dateMs: 900 },
+    { id: "b", dateMs: 3000 }
+  ], { now: 1000 });
+  assert.equal(reply.nextReplyAlarmAt(state, 1000, 250), 1250);
+  const sent = reply.markReplySent(state, "a", 1100);
+  assert.equal(reply.nextReplyAlarmAt(sent, 1200, 250), 3000);
+  assert.equal(reply.nextReplyAlarmAt(reply.markReplyStopped(sent), 1200, 250), null);
+});
+
+test("recovers an interrupted send as a manual-review failure", () => {
+  const state = reply.createReplyRunState([{ id: "a", dateMs: 2000 }], { now: 1000 });
+  const processing = reply.markReplyProcessing(state, "a", 1500);
+  const recovered = reply.recoverInterruptedReplyRunState(processing, 1600);
+  assert.equal(recovered.status, "failed");
+  assert.equal(recovered.items[0].status, "failed");
+  assert.match(recovered.items[0].error, /结果未知/);
+});
+
+test("migrates legacy queued and scheduled reply states", () => {
+  const migrated = reply.migrateReplyRunState({
+    status: "stopping",
+    currentIndex: 0,
+    items: [
+      { id: "a", status: "scheduled", dateMs: 1000 },
+      { id: "b", status: "queued", dateMs: 2000 }
+    ]
+  });
+  assert.equal(migrated.status, "stopped");
+  assert.equal(migrated.items[0].status, "sent");
+  assert.equal(migrated.items[1].status, "pending");
+  assert.equal(migrated.currentIndex, 1);
+});
+
+test("only accepts explicit reply action labels", () => {
+  for (const label of ["Reply", "Reply now", "回复", "立即回复", "回覆"]) {
+    assert.equal(reply.isSafeReplyAction(label), true, label);
   }
-  for (const label of ["Post", "Reply", "回复", "Send now", ""]) {
-    assert.equal(reply.isSafeScheduleAction(label), false, label);
+  for (const label of ["Post", "Schedule", "Send now", "Delete reply", ""]) {
+    assert.equal(reply.isSafeReplyAction(label), false, label);
   }
 });

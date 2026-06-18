@@ -1,5 +1,7 @@
 # X Reply Scheduling and Target Timezone Implementation Plan
 
+> Implementation amendment: X does not expose native scheduling inside reply composers. The completed implementation persists reply tasks and uses `chrome.alarms` to send them at the target instant. See `../specs/2026-06-18-x-extension-timed-replies-amendment.md`; it supersedes conflicting native-reply-scheduling steps below.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a standalone batch reply scheduler that uses X's native reply scheduling flow and make original/reply schedules run in a user-selected IANA timezone.

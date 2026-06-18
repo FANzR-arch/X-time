@@ -1,8 +1,8 @@
 # X-time
 
-本仓库保存本地 Chrome/Edge 扩展 `X Native Scheduler Test Plugin`，支持原创帖队列和纯文字回复队列，并通过 X 网页原生定时流程排期。原创与回复共用可选择的目标时区。
+本仓库保存本地 Chrome/Edge 扩展 `X Native Scheduler Test Plugin`，支持原创帖队列和纯文字定时回复队列。原创帖使用 X 网页原生定时流程；回复任务由扩展保存并在目标时间自动打开帖子发送。两种模式共用可选择的目标时区。
 
-扩展不调用 X API，不上传到第三方平台，也不保存账号密码。运行时依赖已经登录的 `x.com` 页面，并通过网页原生发帖/定时 UI 完成操作。
+扩展不调用 X API，不上传到第三方平台，也不保存账号密码。运行时依赖已经登录的 `x.com` 页面，并通过网页 UI 完成操作。
 
 ## 当前主扩展
 
@@ -16,8 +16,8 @@ x-native-scheduler-test-plugin/
 - `popup.html` / `popup.js`：独立窗口 UI、队列编辑、AI 队列导入、排期预览和执行入口。
 - `timezone-core.js`：目标时区、UTC 偏移和夏令时换算。
 - `reply-core.js`：回复队列解析、目标链接校验和恢复状态。
-- `content.js`：注入 X 页面后执行原创发帖或单条原生回复排期。
-- `background.js`：打开扩展窗口，并持久化编排跨多个目标页面的回复队列。
+- `content.js`：注入 X 页面后执行原创排期，或在定时任务到点时发送单条回复。
+- `background.js`：打开扩展窗口，持久化回复队列，并用浏览器闹钟在目标时间唤醒任务。
 - `sample_queue.md`：推荐 Markdown 队列模板。
 - `sample_reply_queue.md`：批量回复模板。
 - `vendor/`：本地打包的 emoji picker 依赖，避免远程 CDN。
@@ -41,7 +41,7 @@ x-native-scheduler-test-plugin/
 5. 原创模式可手动输入帖子或导入队列；回复模式批量导入多组目标链接和回复正文。
 6. 如原创队列使用 `media:`，先在“媒体素材”里选择同名本地文件。
 7. 预览中核对目标时区时间和本机换算时间。
-8. 点击“开始”。回复任务会逐条打开目标帖子并尝试使用回复框里的原生排期。
+8. 点击“开始”。回复任务会保存在扩展后台；到目标时间后自动打开帖子、填入正文并点击明确的回复按钮。
 9. 完成后到 X 的 `Unsent posts / Scheduled` 或草稿列表里复核。
 
 ## 队列格式
@@ -82,7 +82,7 @@ url: https://x.com/example/status/1234567890123456789
 第一条纯文字回复。
 ```
 
-回复模式只支持纯文字。如果回复编辑器没有明确的原生 `Schedule / 定时` 按钮，插件会停止且不会立即发送。失败后使用“从失败项继续”，已经排期成功的任务不会重复执行。
+回复模式只支持纯文字。X 本身没有原生回复排期，因此扩展必须在发送时间保持浏览器运行并保持 X 登录。失败后使用“恢复未发送任务”；已经发送成功的回复不会重复执行。若浏览器或标签页在点击发送期间中断，任务会标记为“结果未知”，要求人工检查后再决定是否恢复。
 
 ## 打包
 
@@ -99,7 +99,7 @@ zip 属于可重新生成的本地交付物，默认不提交到 Git。
 提交前至少做一次轻量检查：
 
 ```powershell
-node --test tests/reply-core.test.cjs tests/timezone-core.test.cjs
+node --test tests/background-reply-scheduler.test.cjs tests/reply-core.test.cjs tests/timezone-core.test.cjs
 node tools/validate-extension.mjs
 node --check x-native-scheduler-test-plugin/background.js
 node --check x-native-scheduler-test-plugin/content.js
@@ -112,7 +112,7 @@ node --check x-native-scheduler-test-plugin/popup.js
 
 - 当前测试版支持普通文本、图片和小视频。
 - 回复排期第一版仅支持纯文字。
-- 回复排期依赖 X 当前页面是否向回复编辑器提供原生排期入口；缺少入口时安全停止。
+- 定时回复依赖 Chrome/Edge 在目标时间运行；浏览器关闭期间错过的任务会在下次启动后尽快恢复。
 - 暂不支持 GIF、投票、线程和长文。
 - 单个媒体和单次队列总媒体测试限制均为 25MB。
 - 扩展不会绕过 X 的登录、安全校验、验证码、风控或平台规则。
