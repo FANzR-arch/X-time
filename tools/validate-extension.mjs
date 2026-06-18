@@ -14,6 +14,7 @@ function main() {
   assertExists(extensionDir, "extension directory");
   validateManifest();
   validateJavaScriptSyntax();
+  validateNativeReplySchedulingFlow();
   validatePopupResources();
   validateZipFreshness();
 
@@ -68,6 +69,43 @@ function validateJavaScriptSyntax() {
     if (result.status !== 0) {
       errors.push(`${file} failed node --check: ${(result.stderr || result.stdout).trim()}`);
     }
+  }
+}
+
+function validateNativeReplySchedulingFlow() {
+  const contentJs = readFileSync(join(extensionDir, "content.js"), "utf8");
+  const backgroundJs = readFileSync(join(extensionDir, "background.js"), "utf8");
+  const flowStart = contentJs.indexOf("async function processScheduledReply(rawItem)");
+  const flowEnd = contentJs.indexOf("function normalizeReplyItem(rawItem)", flowStart);
+  const replyFlow = flowStart >= 0 && flowEnd > flowStart ? contentJs.slice(flowStart, flowEnd) : "";
+  const requiredSteps = [
+    "realClick(replyButton)",
+    "await fillComposer(editable, item.text)",
+    "await openScheduleDialog(editable)",
+    "await setScheduleDialog(new Date(item.scheduledEpochMs))",
+    "await confirmScheduleDialog()",
+    "await publishScheduledReply(editable)"
+  ];
+  if (!replyFlow) errors.push("content.js must define processScheduledReply before normalizeReplyItem");
+  const stepIndexes = requiredSteps.map((step) => replyFlow.indexOf(step));
+
+  requiredSteps.forEach((step, index) => {
+    if (stepIndexes[index] < 0) errors.push(`native reply scheduling step is missing: ${step}`);
+  });
+  for (let index = 1; index < stepIndexes.length; index += 1) {
+    if (stepIndexes[index - 1] >= 0 && stepIndexes[index] >= 0 && stepIndexes[index - 1] >= stepIndexes[index]) {
+      errors.push("native reply scheduling steps must remain in open, fill, schedule, confirm, save order");
+      break;
+    }
+  }
+  if (!contentJs.includes("XnsReply.isSafeScheduleAction(label)")) {
+    errors.push("reply submission must require an explicit native Schedule action");
+  }
+  if (!backgroundJs.includes('type: "xns-process-reply"')) {
+    errors.push("background.js must dispatch replies through the native scheduling flow");
+  }
+  if (contentJs.includes('message.type === "xns-send-reply-now"')) {
+    errors.push("reply scheduling must never fall back to extension-timed direct sending");
   }
 }
 
