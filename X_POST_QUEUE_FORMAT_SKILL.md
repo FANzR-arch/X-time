@@ -61,7 +61,7 @@ Then generate timestamps inside that target-timezone window when possible. If th
 
 If the user says "自动排程", omit `scheduled_at` and let the plugin assign times.
 
-When automatic scheduling is requested, the plugin defaults to the daily `08:00-23:00` window, distributes posts evenly, and can optionally add random jitter only to plugin-generated times.
+When automatic scheduling is requested, the plugin defaults to the target timezone's daily `08:00-23:00` window. Its adaptive first-day mode can begin today at target-zone now plus 10 minutes; fixed first-day mode uses the configured daily start and rolls to tomorrow after that time has passed. It distributes posts evenly and can optionally add random jitter only to plugin-generated times.
 
 ## Media Rules
 

@@ -16,6 +16,7 @@ const STORAGE_KEYS = {
   runState: "xns.runState",
   replyRunState: "xns.replyRunState"
 };
+const DEFAULT_TIMEZONE_KEY = "xns.preferences.defaultTimezone";
 
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 const MAX_RUN_MEDIA_BYTES = 25 * 1024 * 1024;
@@ -107,9 +108,13 @@ const els = {
   targetTimezone: document.getElementById("targetTimezone"),
   targetTimezoneLabel: document.getElementById("targetTimezoneLabel"),
   browserTimezoneLabel: document.getElementById("browserTimezoneLabel"),
+  saveTimezone: document.getElementById("saveTimezone"),
+  savedTimezoneHint: document.getElementById("savedTimezoneHint"),
   scheduleOnlySections: [...document.querySelectorAll(".schedule-only")],
   manualScheduledAt: document.getElementById("manualScheduledAt"),
   scheduleMode: document.getElementById("scheduleMode"),
+  firstDayStartMode: document.getElementById("firstDayStartMode"),
+  firstDayStartHint: document.getElementById("firstDayStartHint"),
   dailyStartTime: document.getElementById("dailyStartTime"),
   dailyEndTime: document.getElementById("dailyEndTime"),
   startAt: document.getElementById("startAt"),
@@ -152,6 +157,7 @@ let persistTimer = null;
 let pastedMediaCounter = 0;
 let editingQueueIndex = null;
 let previewMediaUrls = [];
+let savedDefaultTimezone = "";
 
 init();
 
@@ -167,6 +173,8 @@ async function init() {
   renderQueue({ validateMedia: false, silent: true });
   updateComposerState();
   updateTimezoneSummary();
+  updateSavedTimezoneHint();
+  updateFirstDayStartHint();
   await renderRunState();
   pollRunState();
 }
@@ -196,6 +204,7 @@ function bindEvents() {
   els.start.addEventListener("click", startQueue);
   els.stop.addEventListener("click", stopQueue);
   els.openX.addEventListener("click", () => chrome.tabs.create({ url: "https://x.com/home" }));
+  els.saveTimezone.addEventListener("click", saveDefaultTimezone);
 
   els.source.addEventListener("input", () => {
     workspaceSources[workspaceMode] = els.source.value;
@@ -214,6 +223,7 @@ function bindEvents() {
     ...els.deliveryModeInputs,
     els.targetTimezone,
     els.scheduleMode,
+    els.firstDayStartMode,
     els.dailyStartTime,
     els.dailyEndTime,
     els.startAt,
@@ -228,6 +238,8 @@ function bindEvents() {
     input.addEventListener("change", () => {
       syncScheduleControls();
       updateTimezoneSummary();
+      updateSavedTimezoneHint();
+      updateFirstDayStartHint();
       renderQueue({ validateMedia: false, silent: true });
       schedulePersistState();
     });
@@ -277,7 +289,8 @@ async function restoreState() {
     STORAGE_KEYS.options,
     STORAGE_KEYS.queue,
     STORAGE_KEYS.replyQueue,
-    STORAGE_KEYS.workspaceMode
+    STORAGE_KEYS.workspaceMode,
+    DEFAULT_TIMEZONE_KEY
   ]);
   workspaceSources.original = saved[STORAGE_KEYS.source] || "";
   workspaceSources.reply = saved[STORAGE_KEYS.replySource] || "";
@@ -285,10 +298,12 @@ async function restoreState() {
   els.source.value = workspaceSources[workspaceMode];
 
   const options = saved[STORAGE_KEYS.options] || {};
-  els.targetTimezone.value = options.targetTimezone || "Asia/Shanghai";
+  savedDefaultTimezone = getValidTimezoneOrEmpty(saved[DEFAULT_TIMEZONE_KEY]);
+  els.targetTimezone.value = savedDefaultTimezone || options.targetTimezone || "Asia/Shanghai";
   setDeliveryMode(options.deliveryMode || "schedule");
   if (options.manualScheduledAt) els.manualScheduledAt.value = toDateTimePlaceholderFormat(options.manualScheduledAt);
   if (options.scheduleMode) els.scheduleMode.value = options.scheduleMode;
+  if (options.firstDayStartMode) els.firstDayStartMode.value = options.firstDayStartMode;
   if (options.dailyStartTime) els.dailyStartTime.value = options.dailyStartTime;
   if (options.dailyEndTime) els.dailyEndTime.value = options.dailyEndTime;
   if (options.startAt) els.startAt.value = options.startAt;
@@ -311,6 +326,7 @@ async function restoreState() {
 function setDefaultTimes() {
   setDeliveryMode("schedule");
   els.scheduleMode.value = "smart";
+  els.firstDayStartMode.value = "adaptive";
   els.dailyStartTime.value = "08:00";
   els.dailyEndTime.value = "23:00";
   els.startAt.value = "";
@@ -320,7 +336,7 @@ function setDefaultTimes() {
   els.jitterEnabled.checked = false;
   els.jitterMinutes.value = "5";
   els.delaySeconds.value = "1.2";
-  els.targetTimezone.value = "Asia/Shanghai";
+  els.targetTimezone.value = savedDefaultTimezone || "Asia/Shanghai";
   syncScheduleControls();
 }
 
@@ -789,6 +805,9 @@ async function resetPluginState() {
   renderMediaList();
   renderQueue({ validateMedia: false, silent: true });
   updateComposerState();
+  updateTimezoneSummary();
+  updateSavedTimezoneHint();
+  updateFirstDayStartHint();
   els.log.textContent = "";
 
   await chrome.storage.local.remove(Object.values(STORAGE_KEYS));
@@ -977,6 +996,7 @@ function normalizeScheduleOptions(options) {
   }
 
   const mode = ["smart", "auto", "document"].includes(options.scheduleMode) ? options.scheduleMode : "smart";
+  const firstDayStartMode = options.firstDayStartMode === "fixed" ? "fixed" : "adaptive";
   const strategy = options.scheduleStrategy === "fixed" ? "fixed" : "even";
   const intervalMs = Math.max(1, Number(options.intervalMinutes || 60)) * 60 * 1000;
   const jitterMinutes = Math.max(1, Number(options.jitterMinutes || 5));
@@ -984,6 +1004,7 @@ function normalizeScheduleOptions(options) {
   return {
     timezone,
     mode,
+    firstDayStartMode,
     strategy,
     dailyStart,
     dailyEnd,
@@ -1102,10 +1123,12 @@ function getAutomaticRange(config, now) {
 }
 
 function getDefaultAutomaticStart(config, now) {
-  const start = new Date(now);
-  start.setDate(start.getDate() + 1);
-  start.setHours(config.dailyStart.hours, config.dailyStart.minutes, 0, 0);
-  return start;
+  return XnsTimezone.resolveDefaultAutomaticStart(now, {
+    mode: config.firstDayStartMode,
+    dailyStartMinutes: config.dailyStart.totalMinutes,
+    dailyEndMinutes: config.dailyEnd.totalMinutes,
+    leadMinutes: 10
+  });
 }
 
 function collectWindowsUntil(start, end, config) {
@@ -1788,6 +1811,58 @@ function updateTimezoneSummary() {
   }
 }
 
+async function saveDefaultTimezone() {
+  const timezone = getTargetTimezone();
+  await chrome.storage.local.set({ [DEFAULT_TIMEZONE_KEY]: timezone });
+  savedDefaultTimezone = timezone;
+  updateSavedTimezoneHint();
+  setStatus(`已保存默认时区：${XnsTimezone.formatZoneLabel(timezone)} · ${timezone}`, "success");
+}
+
+function updateSavedTimezoneHint() {
+  if (!savedDefaultTimezone) {
+    els.saveTimezone.disabled = false;
+    els.saveTimezone.textContent = "保存为默认时区";
+    els.savedTimezoneHint.textContent = "尚未保存默认时区";
+    return;
+  }
+  const isCurrent = getTargetTimezone() === savedDefaultTimezone;
+  els.saveTimezone.disabled = isCurrent;
+  els.saveTimezone.textContent = isCurrent ? "已保存为默认" : "保存为默认时区";
+  els.savedTimezoneHint.textContent = isCurrent
+    ? "当前选择已保存"
+    : `已保存：${XnsTimezone.formatZoneLabel(savedDefaultTimezone)} · ${savedDefaultTimezone}`;
+}
+
+function updateFirstDayStartHint() {
+  try {
+    const dailyStart = parseClockTime(els.dailyStartTime.value || "08:00");
+    const dailyEnd = parseClockTime(els.dailyEndTime.value || "23:00");
+    if (!dailyStart || !dailyEnd) throw new Error("请填写有效的每日发布窗口。");
+    const timezone = getTargetTimezone();
+    const now = XnsTimezone.epochToWallDate(Date.now(), timezone);
+    const start = XnsTimezone.resolveDefaultAutomaticStart(now, {
+      mode: els.firstDayStartMode.value,
+      dailyStartMinutes: dailyStart.totalMinutes,
+      dailyEndMinutes: dailyEnd.totalMinutes,
+      leadMinutes: 10
+    });
+    const dayLabel = isSameDate(start, now) ? "今天" : "明天";
+    const modeLabel = els.firstDayStartMode.value === "fixed" ? "固定时间" : "智能时间";
+    els.firstDayStartHint.textContent = `${modeLabel}：首批将从${dayLabel} ${formatDateTime(start).slice(11)} 开始；跨日后从 ${els.dailyStartTime.value} 开始。`;
+  } catch (error) {
+    els.firstDayStartHint.textContent = error.message;
+  }
+}
+
+function getValidTimezoneOrEmpty(value) {
+  try {
+    return value ? XnsTimezone.assertTimeZone(value) : "";
+  } catch (_error) {
+    return "";
+  }
+}
+
 function getTargetTimezone() {
   return XnsTimezone.assertTimeZone(els.targetTimezone.value || "Asia/Shanghai");
 }
@@ -1802,6 +1877,7 @@ function getOptions() {
     deliveryMode: getDeliveryMode(),
     manualScheduledAt: els.manualScheduledAt.value,
     scheduleMode: els.scheduleMode.value,
+    firstDayStartMode: els.firstDayStartMode.value,
     dailyStartTime: els.dailyStartTime.value,
     dailyEndTime: els.dailyEndTime.value,
     startAt: els.startAt.value,
@@ -1844,6 +1920,7 @@ function syncScheduleControls() {
   const scheduleOnlyInputs = [
     els.manualScheduledAt,
     els.scheduleMode,
+    els.firstDayStartMode,
     els.dailyStartTime,
     els.dailyEndTime,
     els.startAt,

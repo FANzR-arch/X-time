@@ -127,6 +127,12 @@ function validatePopupResources() {
   if (!/<div id="targetTimezoneGroup" class="schedule-group">/.test(popupHtml)) {
     errors.push("target timezone controls must remain visible in both original and reply workspaces");
   }
+  if (!/id="saveTimezone"/.test(popupHtml)) {
+    errors.push("target timezone controls must provide an explicit save-default action");
+  }
+  if (!/id="firstDayStartMode"/.test(popupHtml)) {
+    errors.push("automatic scheduling must expose adaptive and fixed first-day modes");
+  }
   if (!/<div id="deliveryModeGroup" class="schedule-group original-only">/.test(popupHtml)) {
     errors.push("draft/schedule delivery controls must only appear in the original workspace");
   }
@@ -148,6 +154,14 @@ function validatePopupResources() {
   const backgroundJs = readFileSync(join(extensionDir, "background.js"), "utf8");
   if (!backgroundJs.includes('importScripts("reply-core.js")')) {
     errors.push("background.js must import reply-core.js");
+  }
+
+  const timezoneCoreJs = readFileSync(join(extensionDir, "timezone-core.js"), "utf8");
+  if (!timezoneCoreJs.includes('Intl.supportedValuesOf("timeZone")')) {
+    errors.push("timezone-core.js must use the runtime IANA timezone catalog");
+  }
+  if (!popupJs.includes("resolveDefaultAutomaticStart")) {
+    errors.push("popup.js must calculate the first automatic slot from the target-zone current time");
   }
 }
 

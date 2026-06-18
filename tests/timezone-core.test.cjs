@@ -48,3 +48,54 @@ test("formats dynamic UTC offset and city", () => {
   assert.match(summer, /^UTC−07:00 · 旧金山$/);
   assert.match(winter, /^UTC−08:00 · 旧金山$/);
 });
+
+test("uses the runtime IANA timezone catalog with curated city aliases", () => {
+  assert.ok(tz.TIMEZONE_OPTIONS.length > 100);
+  assert.equal(tz.TIMEZONE_OPTIONS.find(option => option.id === "America/Los_Angeles")?.city, "旧金山");
+  assert.ok(tz.TIMEZONE_OPTIONS.some(option => ![
+    "Asia/Shanghai", "America/Los_Angeles", "America/New_York", "Europe/London", "Europe/Paris",
+    "Asia/Tokyo", "Asia/Singapore", "Asia/Hong_Kong", "Australia/Sydney", "UTC"
+  ].includes(option.id)));
+});
+
+test("adaptive first-day scheduling starts today from target-zone now plus ten minutes", () => {
+  const now = new Date(2026, 5, 18, 14, 23, 20);
+  const start = tz.resolveDefaultAutomaticStart(now, {
+    mode: "adaptive",
+    dailyStartMinutes: 8 * 60,
+    dailyEndMinutes: 23 * 60,
+    leadMinutes: 10
+  });
+  assert.equal(formatWall(start), "2026-06-18 14:34");
+});
+
+test("adaptive first-day scheduling rolls to tomorrow after today's window", () => {
+  const now = new Date(2026, 5, 18, 22, 55, 0);
+  const start = tz.resolveDefaultAutomaticStart(now, {
+    mode: "adaptive",
+    dailyStartMinutes: 8 * 60,
+    dailyEndMinutes: 23 * 60,
+    leadMinutes: 10
+  });
+  assert.equal(formatWall(start), "2026-06-19 08:00");
+});
+
+test("fixed first-day scheduling uses today's fixed time or the next day when passed", () => {
+  const before = tz.resolveDefaultAutomaticStart(new Date(2026, 5, 18, 7, 0, 0), {
+    mode: "fixed",
+    dailyStartMinutes: 8 * 60,
+    dailyEndMinutes: 23 * 60
+  });
+  const after = tz.resolveDefaultAutomaticStart(new Date(2026, 5, 18, 9, 0, 0), {
+    mode: "fixed",
+    dailyStartMinutes: 8 * 60,
+    dailyEndMinutes: 23 * 60
+  });
+  assert.equal(formatWall(before), "2026-06-18 08:00");
+  assert.equal(formatWall(after), "2026-06-19 08:00");
+});
+
+function formatWall(date) {
+  const pad = value => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}

@@ -787,6 +787,22 @@
         gap: 8px;
       }
 
+      .timezone-save-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .timezone-save-row button {
+        flex: 0 0 auto;
+        min-height: 32px;
+        padding: 6px 12px;
+      }
+
+      .timezone-save-row .input-hint {
+        flex: 1 1 auto;
+      }
+
       .segmented {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1323,6 +1339,10 @@
                 <select id="targetTimezone" aria-label="目标时区"></select>
                 <span id="targetTimezoneLabel" class="input-hint"></span>
                 <span id="browserTimezoneLabel" class="input-hint"></span>
+                <span class="timezone-save-row">
+                  <button id="saveTimezone" type="button">保存为默认时区</button>
+                  <span id="savedTimezoneHint" class="input-hint"></span>
+                </span>
               </label>
             </div>
 
@@ -1358,6 +1378,14 @@
                   <option value="auto">全部自动</option>
                   <option value="document">严格文档时间</option>
                 </select>
+              </label>
+              <label class="wide">
+                首日开始方式
+                <select id="firstDayStartMode">
+                  <option value="adaptive">今天智能开始（当前时间 + 10 分钟）</option>
+                  <option value="fixed">固定每日开始时间</option>
+                </select>
+                <span id="firstDayStartHint" class="input-hint"></span>
               </label>
               <div class="schedule-row">
                 <label>

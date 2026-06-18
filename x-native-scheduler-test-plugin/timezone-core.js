@@ -5,7 +5,7 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, () => {
   "use strict";
 
-  const TIMEZONE_OPTIONS = [
+  const CURATED_TIMEZONE_OPTIONS = [
     { id: "Asia/Shanghai", city: "北京", aliases: ["上海", "中国", "beijing", "shanghai", "utc+8"] },
     { id: "America/Los_Angeles", city: "旧金山", aliases: ["洛杉矶", "san francisco", "los angeles", "pacific"] },
     { id: "America/New_York", city: "纽约", aliases: ["new york", "eastern"] },
@@ -17,8 +17,36 @@
     { id: "Australia/Sydney", city: "悉尼", aliases: ["sydney", "澳大利亚"] },
     { id: "UTC", city: "协调世界时", aliases: ["gmt", "utc+0"] }
   ];
+  const TIMEZONE_OPTIONS = buildTimezoneOptions();
 
   const formatterCache = new Map();
+
+  function buildTimezoneOptions() {
+    let supported = [];
+    try {
+      supported = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
+    } catch (_error) {
+      supported = [];
+    }
+
+    const curatedById = new Map(CURATED_TIMEZONE_OPTIONS.map((option) => [option.id, option]));
+    const ids = [...new Set([
+      ...CURATED_TIMEZONE_OPTIONS.map((option) => option.id),
+      ...supported,
+      "UTC"
+    ])];
+    return ids.map((id) => {
+      const curated = curatedById.get(id);
+      if (curated) return { ...curated, aliases: [...curated.aliases] };
+      const parts = id.split("/");
+      const city = (parts.at(-1) || id).replaceAll("_", " ");
+      return {
+        id,
+        city,
+        aliases: [city, parts[0] || "", id.replaceAll("_", " ")].filter(Boolean)
+      };
+    });
+  }
 
   function assertTimeZone(timeZone) {
     const value = String(timeZone || "").trim();
@@ -176,6 +204,55 @@
     return `UTC${sign}${pad(hours)}:${pad(minutes)} · ${city}`;
   }
 
+  function resolveDefaultAutomaticStart(nowWallDate, options = {}) {
+    if (!(nowWallDate instanceof Date) || Number.isNaN(nowWallDate.getTime())) {
+      throw new Error("目标时区当前时间无效。");
+    }
+    const dailyStartMinutes = normalizeMinuteOfDay(options.dailyStartMinutes, 8 * 60, "每日开始");
+    const dailyEndMinutes = normalizeMinuteOfDay(options.dailyEndMinutes, 23 * 60, "每日结束");
+    if (dailyStartMinutes >= dailyEndMinutes) throw new Error("每日结束时间必须晚于每日开始时间。");
+
+    const mode = options.mode === "fixed" ? "fixed" : "adaptive";
+    const leadMinutes = Math.max(1, Math.floor(Number(options.leadMinutes || 10)));
+    const todayStart = wallDateAtMinute(nowWallDate, dailyStartMinutes);
+    const todayEnd = wallDateAtMinute(nowWallDate, dailyEndMinutes);
+
+    if (mode === "fixed") {
+      if (todayStart.getTime() > nowWallDate.getTime() + 60_000) return todayStart;
+      return wallDateAtMinute(addWallDays(nowWallDate, 1), dailyStartMinutes);
+    }
+
+    const adaptiveStart = roundWallDateUpToMinute(new Date(nowWallDate.getTime() + leadMinutes * 60_000));
+    if (adaptiveStart.getTime() <= todayStart.getTime()) return todayStart;
+    if (adaptiveStart.getTime() <= todayEnd.getTime()) return adaptiveStart;
+    return wallDateAtMinute(addWallDays(nowWallDate, 1), dailyStartMinutes);
+  }
+
+  function normalizeMinuteOfDay(value, fallback, label) {
+    const minutes = value === undefined || value === null || value === "" ? fallback : Number(value);
+    if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1439) throw new Error(`${label}时间无效。`);
+    return minutes;
+  }
+
+  function wallDateAtMinute(date, minuteOfDay) {
+    const next = new Date(date);
+    next.setHours(Math.floor(minuteOfDay / 60), minuteOfDay % 60, 0, 0);
+    return next;
+  }
+
+  function addWallDays(date, amount) {
+    const next = new Date(date);
+    next.setDate(next.getDate() + amount);
+    return next;
+  }
+
+  function roundWallDateUpToMinute(date) {
+    const next = new Date(date);
+    if (next.getSeconds() || next.getMilliseconds()) next.setMinutes(next.getMinutes() + 1);
+    next.setSeconds(0, 0);
+    return next;
+  }
+
   function pad(value) {
     return String(value).padStart(2, "0");
   }
@@ -187,6 +264,7 @@
     wallDateToEpoch,
     formatEpochInZone,
     formatZoneLabel,
-    getOffsetMinutes
+    getOffsetMinutes,
+    resolveDefaultAutomaticStart
   };
 });
