@@ -30,11 +30,11 @@
     }
 
     const curatedById = new Map(CURATED_TIMEZONE_OPTIONS.map((option) => [option.id, option]));
-    const ids = [...new Set([
-      ...CURATED_TIMEZONE_OPTIONS.map((option) => option.id),
-      ...supported,
-      "UTC"
-    ])];
+    const runtimeIds = supported.length
+      ? supported
+      : CURATED_TIMEZONE_OPTIONS.map((option) => option.id);
+    const ids = [...new Set([...runtimeIds, "UTC"])]
+      .sort((left, right) => left.localeCompare(right, "en"));
     return ids.map((id) => {
       const curated = curatedById.get(id);
       if (curated) return { ...curated, aliases: [...curated.aliases] };

@@ -56,6 +56,8 @@ test("uses the runtime IANA timezone catalog with curated city aliases", () => {
     "Asia/Shanghai", "America/Los_Angeles", "America/New_York", "Europe/London", "Europe/Paris",
     "Asia/Tokyo", "Asia/Singapore", "Asia/Hong_Kong", "Australia/Sydney", "UTC"
   ].includes(option.id)));
+  const ids = tz.TIMEZONE_OPTIONS.map(option => option.id);
+  assert.deepEqual(ids, [...ids].sort((left, right) => left.localeCompare(right, "en")));
 });
 
 test("adaptive first-day scheduling starts today from target-zone now plus ten minutes", () => {
